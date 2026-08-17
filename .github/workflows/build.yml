@@ -8,10 +8,11 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: egor-tensin/setup-mingw@v2
         with:
           platform: x64
+          static: 0
       - name: Build
         shell: cmd
         run: build.cmd

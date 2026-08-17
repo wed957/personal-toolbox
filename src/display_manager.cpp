@@ -122,12 +122,17 @@ bool QuerySnapshot(UINT32 flags, DisplaySnapshot& snapshot, LONG& error_code) {
 bool GetTargetName(
     const DISPLAYCONFIG_PATH_TARGET_INFO& target,
     DISPLAYCONFIG_TARGET_DEVICE_NAME& name) {
-    name = {};
-    name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
-    name.header.size = sizeof(name);
-    name.header.adapterId = target.adapterId;
-    name.header.id = target.id;
-    return DisplayConfigGetDeviceInfo(&name.header) == ERROR_SUCCESS;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        name = {};
+        name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+        name.header.size = sizeof(name);
+        name.header.adapterId = target.adapterId;
+        name.header.id = target.id;
+        if (DisplayConfigGetDeviceInfo(&name.header) == ERROR_SUCCESS) {
+            return true;
+        }
+    }
+    return false;
 }
 
 std::wstring TargetIdentity(
@@ -257,16 +262,14 @@ bool SnapshotActiveKeys(
                 matched_alias = &*found;
             }
         }
-        if (matched_alias != nullptr) {
-            keys.push_back(matched_alias->identity);
+        DISPLAYCONFIG_TARGET_DEVICE_NAME name{};
+        if (GetTargetName(path.targetInfo, name)) {
+            keys.push_back(TargetIdentity(path.targetInfo, name));
             continue;
         }
 
-        DISPLAYCONFIG_TARGET_DEVICE_NAME name{};
         keys.push_back(
-            GetTargetName(path.targetInfo, name)
-                ? TargetIdentity(path.targetInfo, name)
-                : connector);
+            matched_alias != nullptr ? matched_alias->identity : connector);
     }
     error_code = ERROR_SUCCESS;
     return true;

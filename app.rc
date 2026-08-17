@@ -5,8 +5,8 @@ IDI_MUX ICON "assets\\mux.ico"
 1 24 "app.manifest"
 
 1 VERSIONINFO
-FILEVERSION 1,1,0,0
-PRODUCTVERSION 1,1,0,0
+FILEVERSION 1,2,0,0
+PRODUCTVERSION 1,2,0,0
 FILEOS 0x40004
 FILETYPE 0x1
 BEGIN
@@ -16,11 +16,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "wed957"
       VALUE "FileDescription", "MUX"
-      VALUE "FileVersion", "1.1.0"
+      VALUE "FileVersion", "1.2.0"
       VALUE "InternalName", "MUX"
       VALUE "OriginalFilename", "MUX.exe"
       VALUE "ProductName", "MUX"
-      VALUE "ProductVersion", "1.1.0"
+      VALUE "ProductVersion", "1.2.0"
     END
   END
   BLOCK "VarFileInfo"

@@ -19,15 +19,23 @@ struct DisplayTarget {
     std::wstring gdi_name;
     unsigned width = 0;
     unsigned height = 0;
+    unsigned preferred_width = 0;
+    unsigned preferred_height = 0;
     double refresh_hz = 0.0;
     bool active = false;
     bool available = false;
+};
+
+struct DisplayAlias {
+    std::wstring connector;
+    std::wstring identity;
 };
 
 struct ApplyRequest {
     DisplaySnapshot configuration;
     DisplaySnapshot rollback;
     std::vector<std::wstring> expected_keys;
+    std::vector<DisplayAlias> aliases;
     bool no_change = false;
 };
 

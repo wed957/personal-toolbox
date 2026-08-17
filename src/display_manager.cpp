@@ -1,6 +1,7 @@
 #include "display_manager.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cwchar>
 #include <cwctype>
@@ -66,10 +67,30 @@ std::wstring TransientTargetKey(const LUID& adapter_id, UINT32 target_id) {
 }
 
 bool QuerySnapshot(UINT32 flags, DisplaySnapshot& snapshot, LONG& error_code) {
+    std::array<DISPLAYCONFIG_PATH_INFO, 16> local_paths{};
+    std::array<DISPLAYCONFIG_MODE_INFO, 32> local_modes{};
+    UINT32 local_path_count = static_cast<UINT32>(local_paths.size());
+    UINT32 local_mode_count = static_cast<UINT32>(local_modes.size());
+    LONG result = QueryDisplayConfig(
+        flags, &local_path_count, local_paths.data(), &local_mode_count,
+        local_modes.data(), nullptr);
+    if (result == ERROR_SUCCESS) {
+        snapshot.paths.assign(
+            local_paths.begin(), local_paths.begin() + local_path_count);
+        snapshot.modes.assign(
+            local_modes.begin(), local_modes.begin() + local_mode_count);
+        error_code = ERROR_SUCCESS;
+        return true;
+    }
+    if (result != ERROR_INSUFFICIENT_BUFFER) {
+        error_code = result;
+        return false;
+    }
+
     for (int attempt = 0; attempt < 5; ++attempt) {
         UINT32 path_count = 0;
         UINT32 mode_count = 0;
-        LONG result = GetDisplayConfigBufferSizes(flags, &path_count, &mode_count);
+        result = GetDisplayConfigBufferSizes(flags, &path_count, &mode_count);
         if (result != ERROR_SUCCESS) {
             error_code = result;
             return false;
@@ -176,7 +197,7 @@ void PopulateModeDetails(
 void PopulatePreferredMode(
     const DISPLAYCONFIG_PATH_TARGET_INFO& target_info,
     DisplayTarget& target) {
-    if (target.width != 0 && target.height != 0) {
+    if (target.preferred_width != 0 && target.preferred_height != 0) {
         return;
     }
 
@@ -186,8 +207,8 @@ void PopulatePreferredMode(
     preferred.header.adapterId = target_info.adapterId;
     preferred.header.id = target_info.id;
     if (DisplayConfigGetDeviceInfo(&preferred.header) == ERROR_SUCCESS) {
-        target.width = preferred.width;
-        target.height = preferred.height;
+        target.preferred_width = preferred.width;
+        target.preferred_height = preferred.height;
     }
 }
 
@@ -215,37 +236,60 @@ std::set<std::wstring> NormalizedSet(
 bool SnapshotActiveKeys(
     const DisplaySnapshot& snapshot,
     std::vector<std::wstring>& keys,
-    LONG& error_code) {
+    LONG& error_code,
+    const std::vector<DisplayAlias>* aliases = nullptr) {
     keys.clear();
     for (const auto& path : snapshot.paths) {
         if ((path.flags & DISPLAYCONFIG_PATH_ACTIVE) == 0) {
             continue;
         }
-        DISPLAYCONFIG_TARGET_DEVICE_NAME name{};
-        if (!GetTargetName(path.targetInfo, name)) {
-            error_code = ERROR_GEN_FAILURE;
-            return false;
+        const std::wstring connector = TransientTargetKey(
+            path.targetInfo.adapterId, path.targetInfo.id);
+        const DisplayAlias* matched_alias = nullptr;
+        if (aliases != nullptr) {
+            const auto found = std::find_if(
+                aliases->begin(), aliases->end(),
+                [&connector](const DisplayAlias& candidate) {
+                    return EqualsOrdinalIgnoreCase(
+                        candidate.connector, connector);
+                });
+            if (found != aliases->end()) {
+                matched_alias = &*found;
+            }
         }
-        keys.push_back(TargetIdentity(path.targetInfo, name));
+        if (matched_alias != nullptr) {
+            keys.push_back(matched_alias->identity);
+            continue;
+        }
+
+        DISPLAYCONFIG_TARGET_DEVICE_NAME name{};
+        keys.push_back(
+            GetTargetName(path.targetInfo, name)
+                ? TargetIdentity(path.targetInfo, name)
+                : connector);
     }
     error_code = ERROR_SUCCESS;
     return true;
 }
 
-bool QueryActiveKeys(std::vector<std::wstring>& keys, LONG& error_code) {
+bool QueryActiveKeys(
+    std::vector<std::wstring>& keys,
+    LONG& error_code,
+    const std::vector<DisplayAlias>* aliases = nullptr) {
     DisplaySnapshot active;
     if (!QuerySnapshot(kActiveQueryFlags, active, error_code)) {
         return false;
     }
-    return SnapshotActiveKeys(active, keys, error_code);
+    return SnapshotActiveKeys(active, keys, error_code, aliases);
 }
 
 bool VerifyActiveKeys(
     const std::vector<std::wstring>& expected_keys,
-    LONG& error_code) {
+    LONG& error_code,
+    const std::vector<DisplayAlias>* aliases = nullptr) {
     for (int attempt = 0; attempt < 3; ++attempt) {
         std::vector<std::wstring> active_keys;
-        if (QueryActiveKeys(active_keys, error_code) &&
+        if (QueryActiveKeys(active_keys, error_code, aliases) &&
             NormalizedSet(active_keys) == NormalizedSet(expected_keys)) {
             return true;
         }
@@ -482,7 +526,28 @@ bool DisplayManager::Refresh(std::wstring& error) {
     }
 
     std::vector<InternalTarget> internals;
-    std::map<std::wstring, size_t> index_by_key;
+    struct CachedTargetName {
+        bool valid = false;
+        DISPLAYCONFIG_TARGET_DEVICE_NAME value{};
+        std::wstring identity;
+    };
+    std::map<std::wstring, CachedTargetName> names_by_connector;
+
+    for (const auto& path : snapshot.paths) {
+        if (!path.targetInfo.targetAvailable) {
+            continue;
+        }
+        const std::wstring connector = Normalize(TransientTargetKey(
+            path.targetInfo.adapterId, path.targetInfo.id));
+        auto& cached = names_by_connector[connector];
+        if (cached.valid || !GetTargetName(path.targetInfo, cached.value)) {
+            continue;
+        }
+        cached.valid = true;
+        cached.identity = TargetIdentity(path.targetInfo, cached.value);
+    }
+
+    std::map<std::wstring, size_t> index_by_identity;
 
     for (size_t path_index = 0; path_index < snapshot.paths.size(); ++path_index) {
         const auto& path = snapshot.paths[path_index];
@@ -490,20 +555,34 @@ bool DisplayManager::Refresh(std::wstring& error) {
             continue;
         }
 
-        DISPLAYCONFIG_TARGET_DEVICE_NAME device_name{};
-        if (!GetTargetName(path.targetInfo, device_name)) {
-            continue;
-        }
+        const std::wstring connector =
+            Normalize(TransientTargetKey(
+                path.targetInfo.adapterId, path.targetInfo.id));
+        const auto cached_name = names_by_connector.find(connector);
+        const bool has_device_name =
+            cached_name != names_by_connector.end() && cached_name->second.valid;
+        const std::wstring identity =
+            has_device_name
+                ? cached_name->second.identity
+                : TransientTargetKey(
+                      path.targetInfo.adapterId, path.targetInfo.id);
+        const std::wstring normalized_identity = Normalize(identity);
 
-        const std::wstring identity = TargetIdentity(path.targetInfo, device_name);
-        const std::wstring normalized_key = Normalize(identity);
-        auto found = index_by_key.find(normalized_key);
-        if (found == index_by_key.end()) {
+        const auto identity_match = index_by_identity.find(normalized_identity);
+        size_t internal_index =
+            identity_match == index_by_identity.end()
+                ? SIZE_MAX
+                : identity_match->second;
+
+        if (internal_index == SIZE_MAX) {
             InternalTarget internal;
             internal.display.key = identity;
-            internal.display.name = TrimDeviceString(
-                device_name.monitorFriendlyDeviceName,
-                std::size(device_name.monitorFriendlyDeviceName));
+            if (has_device_name) {
+                internal.display.name = TrimDeviceString(
+                    cached_name->second.value.monitorFriendlyDeviceName,
+                    std::size(
+                        cached_name->second.value.monitorFriendlyDeviceName));
+            }
             if (internal.display.name.empty()) {
                 internal.display.name = FriendlyFallback(path.targetInfo);
             }
@@ -511,12 +590,11 @@ bool DisplayManager::Refresh(std::wstring& error) {
             internal.adapter_id = path.targetInfo.adapterId;
             internal.target_id = path.targetInfo.id;
             internals.push_back(std::move(internal));
-            const size_t new_index = internals.size() - 1;
-            index_by_key.emplace(normalized_key, new_index);
-            found = index_by_key.find(normalized_key);
+            internal_index = internals.size() - 1;
+            index_by_identity.emplace(normalized_identity, internal_index);
         }
 
-        auto& internal = internals[found->second];
+        auto& internal = internals[internal_index];
         internal.candidate_paths.push_back(path_index);
         if ((path.flags & DISPLAYCONFIG_PATH_ACTIVE) != 0) {
             internal.display.active = true;
@@ -528,11 +606,14 @@ bool DisplayManager::Refresh(std::wstring& error) {
 
     std::stable_sort(
         internals.begin(), internals.end(), [](const auto& left, const auto& right) {
-            if (left.display.active != right.display.active) {
-                return left.display.active > right.display.active;
+            const int name_order = CompareStringOrdinal(
+                left.display.name.c_str(), -1, right.display.name.c_str(), -1,
+                TRUE);
+            if (name_order != CSTR_EQUAL) {
+                return name_order == CSTR_LESS_THAN;
             }
             return CompareStringOrdinal(
-                       left.display.name.c_str(), -1, right.display.name.c_str(), -1,
+                       left.display.key.c_str(), -1, right.display.key.c_str(), -1,
                        TRUE) == CSTR_LESS_THAN;
         });
 
@@ -574,6 +655,23 @@ bool DisplayManager::CreateApplyRequest(
         return false;
     }
 
+    for (const auto& target : internal_targets_) {
+        for (const size_t path_index : target.candidate_paths) {
+            const auto& target_info = all_paths_.paths[path_index].targetInfo;
+            const std::wstring connector = TransientTargetKey(
+                target_info.adapterId, target_info.id);
+            const bool already_added = std::any_of(
+                request.aliases.begin(), request.aliases.end(),
+                [&connector](const DisplayAlias& alias) {
+                    return EqualsOrdinalIgnoreCase(alias.connector, connector);
+                });
+            if (!already_added) {
+                request.aliases.push_back(
+                    {connector, target.display.key});
+            }
+        }
+    }
+
     LONG error_code = ERROR_SUCCESS;
     if (!QuerySnapshot(kActiveQueryFlags, request.rollback, error_code)) {
         error = L"无法保存当前显示布局：" + FormatSystemError(error_code);
@@ -581,7 +679,8 @@ bool DisplayManager::CreateApplyRequest(
     }
 
     std::vector<std::wstring> active_keys;
-    if (!SnapshotActiveKeys(request.rollback, active_keys, error_code)) {
+    if (!SnapshotActiveKeys(
+            request.rollback, active_keys, error_code, &request.aliases)) {
         error = L"无法验证当前显示布局：" + FormatSystemError(error_code);
         return false;
     }
@@ -683,7 +782,8 @@ OperationResult DisplayManager::Execute(ApplyRequest request) {
     std::vector<std::wstring> rollback_keys;
     LONG rollback_snapshot_error = ERROR_SUCCESS;
     if (!SnapshotActiveKeys(
-            request.rollback, rollback_keys, rollback_snapshot_error)) {
+            request.rollback, rollback_keys, rollback_snapshot_error,
+            &request.aliases)) {
         return {
             false, false, false, rollback_snapshot_error,
             L"无法读取恢复快照，未执行切换：" +
@@ -697,7 +797,8 @@ OperationResult DisplayManager::Execute(ApplyRequest request) {
     // Some drivers return an error after committing the topology. Only the
     // exceptional path pays for verification and recovery.
     LONG verify_error = ERROR_SUCCESS;
-    if (VerifyActiveKeys(request.expected_keys, verify_error)) {
+    if (VerifyActiveKeys(
+            request.expected_keys, verify_error, &request.aliases)) {
         return {
             true, false, false, ERROR_SUCCESS,
             L"显示布局已应用；显卡驱动同时返回了警告 " +
@@ -706,7 +807,8 @@ OperationResult DisplayManager::Execute(ApplyRequest request) {
 
     const LONG rollback_error = ApplySnapshot(request.rollback);
     LONG rollback_verify_error = ERROR_SUCCESS;
-    if (VerifyActiveKeys(rollback_keys, rollback_verify_error)) {
+    if (VerifyActiveKeys(
+            rollback_keys, rollback_verify_error, &request.aliases)) {
         if (apply_result != ERROR_SUCCESS) {
             return {
                 false, false, true, apply_result,

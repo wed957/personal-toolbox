@@ -37,9 +37,13 @@ int ListDisplays(DisplayManager& manager) {
         if (!target.gdi_name.empty()) {
             line += L"  " + target.gdi_name;
         }
-        if (target.width != 0 && target.height != 0) {
+        if (target.active && target.width != 0 && target.height != 0) {
             line += L"  " + std::to_wstring(target.width) + L"x" +
                     std::to_wstring(target.height);
+        } else if (!target.active && target.preferred_width != 0 &&
+                   target.preferred_height != 0) {
+            line += L"  首选 " + std::to_wstring(target.preferred_width) + L"x" +
+                    std::to_wstring(target.preferred_height);
         }
         PrintLine(line);
     }

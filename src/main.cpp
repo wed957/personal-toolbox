@@ -4,10 +4,15 @@
 #include <commctrl.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <exception>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using mux::ApplyRequest;
@@ -20,10 +25,11 @@ namespace {
 constexpr wchar_t kWindowClass[] = L"MUX.MainWindow";
 constexpr wchar_t kTargetName[] = L"P25W2GC";
 constexpr UINT kRefreshTimer = 1;
+constexpr UINT kJobPollTimer = 2;
 constexpr UINT kRefreshDelayMs = 350;
+constexpr UINT kJobPollDelayMs = 50;
 constexpr UINT kJobCompleted = WM_APP + 1;
 constexpr UINT kInitialRefresh = WM_APP + 2;
-constexpr LRESULT kJobHandled = 0x4D53;
 
 enum ControlId {
     kTitle = 100,
@@ -38,24 +44,29 @@ enum ControlId {
 };
 
 enum class JobKind {
+    Refresh,
     Apply,
     Restore,
+};
+
+enum class ApplyIntent {
+    Selected,
+    OnlyTarget,
+    All,
 };
 
 struct JobResult {
     JobKind kind = JobKind::Apply;
     OperationResult operation;
     DisplaySnapshot previous;
+    DisplayManager manager;
+    std::vector<std::wstring> preserved_selection;
+    std::wstring refresh_error;
+    UINT64 topology_generation = 0;
+    bool manager_refreshed = false;
+    bool preserve_selection = false;
+    bool consumes_topology_events = false;
 };
-
-void DeliverJobResult(HWND destination, std::unique_ptr<JobResult> result) {
-    JobResult* raw_result = result.release();
-    if (SendMessageW(
-            destination, kJobCompleted, 0,
-            reinterpret_cast<LPARAM>(raw_result)) != kJobHandled) {
-        delete raw_result;
-    }
-}
 
 int Scale(int value, UINT dpi) {
     return MulDiv(value, static_cast<int>(dpi), 96);
@@ -106,6 +117,14 @@ public:
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
+        shutting_down_.store(true, std::memory_order_release);
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+        {
+            std::lock_guard<std::mutex> lock(job_mutex_);
+            completed_job_.reset();
+        }
         return static_cast<int>(message.wParam);
     }
 
@@ -121,8 +140,22 @@ private:
             SetWindowLongPtrW(window, GWLP_USERDATA,
                               reinterpret_cast<LONG_PTR>(app));
         }
-        return app != nullptr ? app->HandleMessage(message, wparam, lparam)
-                              : DefWindowProcW(window, message, wparam, lparam);
+        LRESULT result = 0;
+        try {
+            result = app != nullptr
+                         ? app->HandleMessage(message, wparam, lparam)
+                         : DefWindowProcW(window, message, wparam, lparam);
+        } catch (...) {
+            if (app != nullptr) {
+                app->HandleUiFailure();
+            }
+            result = 0;
+        }
+        if (message == WM_NCDESTROY && app != nullptr) {
+            SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+            app->window_ = nullptr;
+        }
+        return result;
     }
 
     LRESULT HandleMessage(UINT message, WPARAM wparam, LPARAM lparam) {
@@ -142,25 +175,34 @@ private:
                 OnNotify(reinterpret_cast<NMHDR*>(lparam));
                 return 0;
             case WM_TIMER:
-                if (wparam == kRefreshTimer) {
+                if (wparam == kJobPollTimer) {
+                    if (job_ready_.load(std::memory_order_acquire)) {
+                        CompleteJob();
+                    }
+                } else if (wparam == kRefreshTimer) {
                     KillTimer(window_, kRefreshTimer);
                     if (!busy_) {
-                        RefreshDisplays();
+                        BeginRefresh(true, false);
+                    } else {
+                        refresh_pending_ = true;
                     }
                 }
                 return 0;
             case WM_DISPLAYCHANGE:
             case WM_DEVICECHANGE:
+                topology_generation_.fetch_add(1, std::memory_order_release);
+                refresh_pending_ = true;
                 if (!busy_) {
                     SetTimer(window_, kRefreshTimer, kRefreshDelayMs, nullptr);
                 }
                 return 0;
             case kJobCompleted:
-                FinishJob(reinterpret_cast<JobResult*>(lparam));
-                return kJobHandled;
+                if (wparam == active_job_id_) {
+                    CompleteJob();
+                }
+                return 0;
             case kInitialRefresh:
-                RefreshDisplays();
-                SetBusy(false);
+                BeginRefresh(false, true);
                 return 0;
             case WM_GETMINMAXINFO: {
                 auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
@@ -169,16 +211,16 @@ private:
                 return 0;
             }
             case WM_CLOSE:
-                if (busy_) {
-                    SetStatus(L"正在等待 Windows 完成显示切换…");
-                    MessageBeep(MB_ICONINFORMATION);
-                    return 0;
-                }
                 DestroyWindow(window_);
                 return 0;
             case WM_DESTROY:
+                shutting_down_.store(true, std::memory_order_release);
+                KillTimer(window_, kRefreshTimer);
+                KillTimer(window_, kJobPollTimer);
                 DeleteObject(font_);
                 DeleteObject(title_font_);
+                font_ = nullptr;
+                title_font_ = nullptr;
                 PostQuitMessage(0);
                 return 0;
             default:
@@ -343,18 +385,18 @@ private:
         ListView_SetColumnWidth(list_, 2, Scale(185, dpi_));
     }
 
-    void RefreshDisplays() {
-        std::wstring error;
-        if (!manager_.Refresh(error)) {
-            SetStatus(error);
-            MessageBoxW(window_, error.c_str(), L"读取显示器失败",
-                        MB_OK | MB_ICONERROR);
-            return;
-        }
-        PopulateList();
+    static bool ContainsKey(
+        const std::vector<std::wstring>& keys, const std::wstring& key) {
+        return std::any_of(keys.begin(), keys.end(), [&key](const auto& value) {
+            return CompareStringOrdinal(
+                       value.c_str(), static_cast<int>(value.size()),
+                       key.c_str(), static_cast<int>(key.size()), TRUE) ==
+                   CSTR_EQUAL;
+        });
     }
 
-    void PopulateList() {
+    void PopulateList(
+        const std::vector<std::wstring>* preserved_selection = nullptr) {
         suppress_list_events_ = true;
         ListView_DeleteAllItems(list_);
         row_keys_.clear();
@@ -372,23 +414,34 @@ private:
             item.iItem = static_cast<int>(index);
             item.pszText = label.data();
             item.lParam = static_cast<LPARAM>(index);
-            ListView_InsertItem(list_, &item);
+            const int row = ListView_InsertItem(list_, &item);
+            if (row < 0) {
+                continue;
+            }
             ListView_SetItemText(
-                list_, static_cast<int>(index), 1,
+                list_, row, 1,
                 const_cast<wchar_t*>(target.active ? L"已启用" : L"未启用"));
 
             std::wstring mode = L"自动";
-            if (target.width != 0 && target.height != 0) {
+            if (target.active && target.width != 0 && target.height != 0) {
                 mode = std::to_wstring(target.width) + L" × " +
                        std::to_wstring(target.height);
-                if (target.active && target.refresh_hz > 1.0) {
+                if (target.refresh_hz > 1.0) {
                     const int rounded = static_cast<int>(
                         std::lround(target.refresh_hz));
                     mode += L" @ " + std::to_wstring(rounded) + L" Hz";
                 }
+            } else if (!target.active && target.preferred_width != 0 &&
+                       target.preferred_height != 0) {
+                mode = L"首选 " + std::to_wstring(target.preferred_width) +
+                       L" × " + std::to_wstring(target.preferred_height);
             }
-            ListView_SetItemText(list_, static_cast<int>(index), 2, mode.data());
-            ListView_SetCheckState(list_, static_cast<int>(index), target.active);
+            ListView_SetItemText(list_, row, 2, mode.data());
+            const bool checked =
+                preserved_selection != nullptr
+                    ? ContainsKey(*preserved_selection, target.key)
+                    : target.active;
+            ListView_SetCheckState(list_, row, checked);
             row_keys_.push_back(target.key);
         }
         suppress_list_events_ = false;
@@ -449,7 +502,7 @@ private:
                 BeginRestore();
                 break;
             case kRefresh:
-                RefreshDisplays();
+                BeginRefresh(true, false);
                 break;
             case kApply:
                 BeginApply(SelectedKeys());
@@ -472,89 +525,242 @@ private:
         }
     }
 
-    void BeginOnlyTarget() {
-        ApplyRequest request;
-        std::wstring error;
-        if (!manager_.CreateOnlyByNameRequest(kTargetName, request, error)) {
-            MessageBoxW(window_, error.c_str(), L"无法切换显示器",
-                        MB_OK | MB_ICONWARNING);
-            SetStatus(error);
+    template <typename Task>
+    bool LaunchJob(
+        JobKind kind, const std::wstring& progress_text, Task&& task) {
+        if (worker_.joinable()) {
+            SetStatus(L"后台任务仍在结束，请稍后重试。");
+            return false;
+        }
+
+        SetBusy(true, progress_text);
+        const HWND destination = window_;
+        UINT_PTR job_id = ++next_job_id_;
+        if (job_id == 0) {
+            job_id = ++next_job_id_;
+        }
+        active_job_id_ = job_id;
+        try {
+            worker_ = std::thread(
+                [this, destination, job_id, kind,
+                 task = std::forward<Task>(task)]() mutable noexcept {
+                    try {
+                        auto result = task();
+                        PublishJobResult(
+                            destination, job_id, std::move(result));
+                    } catch (...) {
+                        PublishJobFailure(destination, job_id, kind);
+                    }
+                });
+            SetTimer(window_, kJobPollTimer, kJobPollDelayMs, nullptr);
+            return true;
+        } catch (...) {
+            active_job_id_ = 0;
+            SetBusy(false, L"无法启动后台任务，请重试。");
+            return false;
+        }
+    }
+
+    void PublishJobResult(
+        HWND destination, UINT_PTR job_id,
+        std::unique_ptr<JobResult> result) noexcept {
+        if (result == nullptr ||
+            shutting_down_.load(std::memory_order_acquire)) {
             return;
         }
-        StartApply(std::move(request), L"正在仅保留 P25W2GC…");
+        {
+            std::lock_guard<std::mutex> lock(job_mutex_);
+            if (shutting_down_.load(std::memory_order_relaxed)) {
+                return;
+            }
+            completed_job_ = std::move(result);
+        }
+        job_ready_.store(true, std::memory_order_release);
+        PostMessageW(destination, kJobCompleted, job_id, 0);
+    }
+
+    void PublishJobFailure(
+        HWND destination, UINT_PTR job_id, JobKind kind) noexcept {
+        try {
+            auto result = std::make_unique<JobResult>();
+            result->kind = kind;
+            result->operation.error_code = ERROR_UNHANDLED_EXCEPTION;
+            result->operation.message = L"后台任务异常终止，未继续操作显示布局。";
+            PublishJobResult(destination, job_id, std::move(result));
+        } catch (...) {
+            job_ready_.store(true, std::memory_order_release);
+            PostMessageW(destination, kJobCompleted, job_id, 0);
+        }
+    }
+
+    void CompleteJob() {
+        if (!worker_.joinable()) {
+            return;
+        }
+        KillTimer(window_, kJobPollTimer);
+        job_ready_.store(false, std::memory_order_release);
+        active_job_id_ = 0;
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+
+        std::unique_ptr<JobResult> result;
+        {
+            std::lock_guard<std::mutex> lock(job_mutex_);
+            result = std::move(completed_job_);
+        }
+        FinishJob(std::move(result));
+    }
+
+    bool RefreshJobManager(JobResult& result) {
+        const UINT64 generation_before =
+            topology_generation_.load(std::memory_order_acquire);
+        result.manager_refreshed =
+            result.manager.Refresh(result.refresh_error);
+        const UINT64 generation_after =
+            topology_generation_.load(std::memory_order_acquire);
+        result.topology_generation = generation_after;
+        result.consumes_topology_events =
+            result.manager_refreshed && generation_before == generation_after;
+        return result.manager_refreshed;
+    }
+
+    void BeginRefresh(bool preserve_selection, bool initial) {
+        refresh_pending_ = false;
+        std::vector<std::wstring> selection;
+        if (preserve_selection) {
+            selection = SelectedKeys();
+        }
+        const std::wstring progress =
+            initial ? L"正在读取显示器…" : L"正在刷新显示器…";
+        if (!LaunchJob(
+                JobKind::Refresh, progress,
+                [this, selection = std::move(selection),
+                 preserve_selection]() mutable {
+                    auto result = std::make_unique<JobResult>();
+                    result->kind = JobKind::Refresh;
+                    result->preserve_selection = preserve_selection;
+                    result->preserved_selection = std::move(selection);
+                    RefreshJobManager(*result);
+                    result->operation.success = result->manager_refreshed;
+                    result->operation.error_code =
+                        result->manager_refreshed ? ERROR_SUCCESS
+                                                  : ERROR_GEN_FAILURE;
+                    result->operation.message =
+                        result->manager_refreshed
+                            ? L"显示器列表已刷新。"
+                            : result->refresh_error;
+                    return result;
+                })) {
+            refresh_pending_ = true;
+        }
+    }
+
+    void BeginOnlyTarget() {
+        BeginApplyWithFreshList(
+            {}, L"正在仅保留 P25W2GC…", ApplyIntent::OnlyTarget);
     }
 
     void BeginEnableAll() {
-        std::vector<std::wstring> keys;
-        for (const auto& target : manager_.targets()) {
-            keys.push_back(target.key);
-        }
-        BeginApplyWithFreshList(keys, L"正在启用全部显示器…");
+        BeginApplyWithFreshList(
+            {}, L"正在启用全部显示器…", ApplyIntent::All);
     }
 
-    void BeginApply(const std::vector<std::wstring>& selected) {
-        BeginApplyWithFreshList(selected, L"正在应用所选显示器…");
+    void BeginApply(std::vector<std::wstring> selected) {
+        BeginApplyWithFreshList(
+            std::move(selected), L"正在应用所选显示器…",
+            ApplyIntent::Selected);
     }
 
     void BeginApplyWithFreshList(
-        const std::vector<std::wstring>& selected,
-        const std::wstring& progress_text) {
-        ApplyRequest request;
-        std::wstring error;
-        if (!manager_.CreateApplyRequest(selected, request, error)) {
-            MessageBoxW(window_, error.c_str(), L"无法应用显示布局",
-                        MB_OK | MB_ICONWARNING);
-            SetStatus(error);
-            return;
-        }
-        StartApply(std::move(request), progress_text);
-    }
+        std::vector<std::wstring> selected,
+        const std::wstring& progress_text,
+        ApplyIntent intent) {
+        DisplayManager manager = manager_;
+        const bool refresh_before_apply = refresh_pending_;
+        refresh_pending_ = false;
+        if (!LaunchJob(
+                JobKind::Apply, progress_text,
+                [this, manager = std::move(manager),
+                 selected = std::move(selected), intent,
+                 refresh_before_apply]() mutable {
+                    auto result = std::make_unique<JobResult>();
+                    result->kind = JobKind::Apply;
+                    result->manager = std::move(manager);
 
-    void StartApply(ApplyRequest request, const std::wstring& progress_text) {
-        if (request.no_change) {
-            const OperationResult result = DisplayManager::Execute(std::move(request));
-            SetStatus(result.message);
-            return;
-        }
+                    std::wstring error;
+                    if (refresh_before_apply &&
+                        !RefreshJobManager(*result)) {
+                        result->operation.error_code = ERROR_GEN_FAILURE;
+                        result->operation.message = result->refresh_error;
+                        return result;
+                    }
 
-        DisplaySnapshot previous = request.rollback;
-        SetBusy(true, progress_text);
-        const HWND destination = window_;
-        std::thread(
-            [destination, request = std::move(request),
-             previous = std::move(previous)]() mutable {
-                auto result = std::make_unique<JobResult>();
-                result->kind = JobKind::Apply;
-                result->previous = std::move(previous);
-                result->operation = DisplayManager::Execute(std::move(request));
-                DeliverJobResult(destination, std::move(result));
-            })
-            .detach();
+                    ApplyRequest request;
+                    if (intent == ApplyIntent::All) {
+                        selected.clear();
+                        for (const auto& target : result->manager.targets()) {
+                            selected.push_back(target.key);
+                        }
+                    }
+                    const bool created =
+                        intent == ApplyIntent::OnlyTarget
+                            ? result->manager.CreateOnlyByNameRequest(
+                                  kTargetName, request, error)
+                            : result->manager.CreateApplyRequest(
+                                  selected, request, error);
+                    if (!created) {
+                        result->operation.error_code = ERROR_INVALID_DATA;
+                        result->operation.message = error;
+                    } else {
+                        const bool no_change = request.no_change;
+                        result->previous = request.rollback;
+                        result->operation =
+                            DisplayManager::Execute(std::move(request));
+                        if (no_change) {
+                            result->manager_refreshed = true;
+                            return result;
+                        }
+                    }
+
+                    RefreshJobManager(*result);
+                    return result;
+                })) {
+            refresh_pending_ = true;
+        }
     }
 
     void BeginRestore() {
-        SetBusy(true, L"正在恢复显示布局…");
-        const HWND destination = window_;
         const bool exact = has_previous_;
         DisplaySnapshot snapshot = previous_;
-        std::thread([destination, exact, snapshot = std::move(snapshot)]() mutable {
-            auto result = std::make_unique<JobResult>();
-            result->kind = JobKind::Restore;
-            result->operation = exact
-                                    ? DisplayManager::Restore(std::move(snapshot))
-                                    : DisplayManager::RestoreExtended();
-            DeliverJobResult(destination, std::move(result));
-        }).detach();
+        DisplayManager manager = manager_;
+        refresh_pending_ = false;
+        if (!LaunchJob(
+                JobKind::Restore, L"正在恢复显示布局…",
+                [this, exact, snapshot = std::move(snapshot),
+                 manager = std::move(manager)]() mutable {
+                    auto result = std::make_unique<JobResult>();
+                    result->kind = JobKind::Restore;
+                    result->manager = std::move(manager);
+                    result->operation =
+                        exact
+                            ? DisplayManager::Restore(std::move(snapshot))
+                            : DisplayManager::RestoreExtended();
+                    RefreshJobManager(*result);
+                    return result;
+                })) {
+            refresh_pending_ = true;
+        }
     }
 
-    void FinishJob(JobResult* raw_result) {
-        std::unique_ptr<JobResult> result(raw_result);
+    void FinishJob(std::unique_ptr<JobResult> result) {
         if (result == nullptr) {
-            SetBusy(false, L"显示切换返回了无效结果。" );
+            SetBusy(false, L"后台任务未返回有效结果，请重试。");
             return;
         }
 
         if (result->kind == JobKind::Apply &&
+            !result->operation.no_change &&
             (result->operation.success || result->operation.recovery_needed)) {
             // Keep the exact pre-switch snapshot even if apply and rollback both
             // fail, so the user can explicitly retry recovery.
@@ -568,18 +774,48 @@ private:
                 SetWindowTextW(restore_button_, L"恢复扩展布局");
         }
 
-        SetBusy(false, result->operation.message);
-        if (!result->operation.success) {
+        if (result->manager_refreshed) {
+            if (result->consumes_topology_events &&
+                result->topology_generation ==
+                    topology_generation_.load(std::memory_order_acquire)) {
+                refresh_pending_ = false;
+            }
+            manager_ = std::move(result->manager);
+            PopulateList(
+                result->preserve_selection ? &result->preserved_selection
+                                           : nullptr);
+        } else if (result->kind != JobKind::Refresh) {
+            refresh_pending_ = true;
+        }
+
+        const std::wstring status =
+            !result->operation.message.empty()
+                ? result->operation.message
+                : result->refresh_error;
+        SetBusy(false, status);
+        if (!result->operation.success && result->kind != JobKind::Refresh) {
             MessageBoxW(window_, result->operation.message.c_str(),
                         L"显示切换失败", MB_OK | MB_ICONERROR);
         }
+        SchedulePendingRefresh();
+    }
 
-        std::wstring error;
-        if (manager_.Refresh(error)) {
-            PopulateList();
-            SetStatus(result->operation.message);
-        } else {
-            SetStatus(error);
+    void SchedulePendingRefresh() {
+        if (refresh_pending_ && window_ != nullptr && !busy_) {
+            SetTimer(window_, kRefreshTimer, kRefreshDelayMs, nullptr);
+        }
+    }
+
+    void HandleUiFailure() noexcept {
+        busy_ = false;
+        if (status_ != nullptr) {
+            SetWindowTextW(status_, L"界面操作失败，请刷新后重试。");
+        }
+        for (HWND control : {list_, only_button_, enable_all_button_,
+                             restore_button_, refresh_button_, apply_button_}) {
+            if (control != nullptr) {
+                EnableWindow(control, TRUE);
+            }
         }
     }
 
@@ -600,6 +836,15 @@ private:
     bool busy_ = false;
     bool suppress_list_events_ = false;
     bool has_previous_ = false;
+    bool refresh_pending_ = false;
+    std::atomic_bool shutting_down_{false};
+    std::atomic_bool job_ready_{false};
+    std::atomic_uint64_t topology_generation_{0};
+    UINT_PTR next_job_id_ = 0;
+    UINT_PTR active_job_id_ = 0;
+    std::thread worker_;
+    std::mutex job_mutex_;
+    std::unique_ptr<JobResult> completed_job_;
     DisplayManager manager_;
     DisplaySnapshot previous_;
     std::vector<std::wstring> row_keys_;

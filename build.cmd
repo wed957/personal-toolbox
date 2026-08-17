@@ -32,8 +32,15 @@ for %%F in (FastLauncher.cs Payload.zip sdk.js IYX.ico) do (
     /reference:System.IO.Compression.dll ^
     /reference:System.IO.Compression.FileSystem.dll ^
     /reference:System.Management.dll ^
+    /reference:System.Web.Extensions.dll ^
     FastLauncher.cs
 
 if errorlevel 1 exit /b %errorlevel%
+
+start /wait "" "%CD%\IYX.exe" --verify-patches
+if errorlevel 1 (
+    echo Driver resource patch verification failed.
+    exit /b 1
+)
 
 echo Built: %CD%\IYX.exe

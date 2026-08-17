@@ -10,14 +10,15 @@ using System.Net.WebSockets;
 using System.Reflection;
 using System.Text;
 using System.Threading;
+using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 [assembly: AssemblyTitle("IYX绿色版")]
 [assembly: AssemblyDescription("IYX 驱动界面绿色版")]
 [assembly: AssemblyCompany("IYX Green")]
 [assembly: AssemblyProduct("IYX绿色版")]
-[assembly: AssemblyVersion("3.0.0.0")]
-[assembly: AssemblyFileVersion("3.0.0.0")]
+[assembly: AssemblyVersion("3.0.1.0")]
+[assembly: AssemblyFileVersion("3.0.1.0")]
 
 internal static class FastProgram
 {
@@ -26,14 +27,24 @@ internal static class FastProgram
     private static readonly object extractionLock = new object();
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        if (args.Length == 1
+            && string.Equals(args[0], "--verify-patches", StringComparison.Ordinal))
+        {
+            VerifyPayloadPatches();
+            return;
+        }
+
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
         string root = Path.Combine(
             Path.GetTempPath(),
             "IYXFast_" + Process.GetCurrentProcess().Id + "_" + Guid.NewGuid().ToString("N"));
+        string stateRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "IYXFastLauncher");
         Process service = null;
         Process iyx = null;
         Process edge = null;
@@ -48,11 +59,11 @@ internal static class FastProgram
             server.Start();
             edge = StartEdge(server.Port, root);
 
-            PrepareBootFiles(root);
-            string dataRoot = Path.Combine(root, "Data");
+            PrepareBootFiles(root, stateRoot);
+            string dataRoot = Path.Combine(stateRoot, "Data");
             string localData = Path.Combine(dataRoot, "Local");
             string roamingData = Path.Combine(dataRoot, "Roaming");
-            string tempData = Path.Combine(dataRoot, "Temp");
+            string tempData = Path.Combine(root, "Data", "Temp");
             Directory.CreateDirectory(roamingData);
             Directory.CreateDirectory(tempData);
 
@@ -80,6 +91,8 @@ internal static class FastProgram
         }
         finally
         {
+            if (service != null && !service.HasExited)
+                TryResetDriverState();
             if (server != null)
                 server.Dispose();
             if (bridge != null)
@@ -91,14 +104,28 @@ internal static class FastProgram
         }
     }
 
+    private static void VerifyPayloadPatches()
+    {
+        try
+        {
+            using (PayloadServer server = new PayloadServer(Path.GetTempPath()))
+            {
+            }
+        }
+        catch
+        {
+            Environment.ExitCode = 1;
+        }
+    }
+
     private static string GetEdgeProfile(string root)
     {
         return Path.Combine(root, "EdgeProfile");
     }
 
-    private static void PrepareBootFiles(string root)
+    private static void PrepareBootFiles(string root, string stateRoot)
     {
-        string localRoot = Path.Combine(root, "Data", "Local", "IYXAST", "apps");
+        string localRoot = Path.Combine(stateRoot, "Data", "Local", "IYXAST", "apps");
         string servicePrefix = "Data/Local/IYXAST/apps/driver_service/";
         string scriptIni = "Data/Local/IYXAST/apps/driver_script/app.ini";
         string scriptIndex = "Data/Local/IYXAST/apps/driver_script/index.html";
@@ -106,16 +133,33 @@ internal static class FastProgram
         ExtractEntries(root, delegate (string name)
         {
             return string.Equals(name, "IYX.exe", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(name, "launch.ini", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(name, scriptIni, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "launch.ini", StringComparison.OrdinalIgnoreCase);
+        }, null);
+
+        ExtractEntries(stateRoot, delegate (string name)
+        {
+            return string.Equals(name, scriptIni, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(name, scriptIndex, StringComparison.OrdinalIgnoreCase)
                 || name.StartsWith(servicePrefix, StringComparison.OrdinalIgnoreCase);
-        });
+        }, IsPersistentDriverConfig);
 
         Directory.CreateDirectory(localRoot);
     }
 
-    private static void ExtractEntries(string root, Func<string, bool> shouldExtract)
+    private static bool IsPersistentDriverConfig(string name)
+    {
+        const string serviceRoot = "Data/Local/IYXAST/apps/driver_service/";
+        return string.Equals(
+                name,
+                serviceRoot + "user.list.cfg.json",
+                StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith(serviceRoot + "user_cfgs/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void ExtractEntries(
+        string root,
+        Func<string, bool> shouldExtract,
+        Func<string, bool> preserveExisting)
     {
         using (Stream payload = Assembly.GetExecutingAssembly().GetManifestResourceStream(PayloadResource))
         {
@@ -131,6 +175,9 @@ internal static class FastProgram
                         continue;
 
                     string target = Path.Combine(root, name.Replace('/', Path.DirectorySeparatorChar));
+                    if (preserveExisting != null && preserveExisting(name) && File.Exists(target))
+                        continue;
+
                     string parent = Path.GetDirectoryName(target);
                     if (!string.IsNullOrEmpty(parent))
                         Directory.CreateDirectory(parent);
@@ -268,6 +315,168 @@ internal static class FastProgram
         return false;
     }
 
+    private static void TryResetDriverState()
+    {
+        try
+        {
+            using (ClientWebSocket socket = new ClientWebSocket())
+            {
+                using (CancellationTokenSource connectTimeout = new CancellationTokenSource(1600))
+                {
+                    socket.ConnectAsync(new Uri("ws://127.0.0.1:8083/entry"), connectTimeout.Token)
+                        .GetAwaiter().GetResult();
+                }
+
+                string calibrationId = "iyx-exit-calibration-" + Guid.NewGuid().ToString("N");
+                string watchId = "iyx-exit-watch-" + Guid.NewGuid().ToString("N");
+                SendDriverRequestAndWait(
+                    socket,
+                    calibrationId,
+                    51,
+                    "{\"Value\":false}");
+                SendDriverRequestAndWait(
+                    socket,
+                    watchId,
+                    50,
+                    "{\"Keys\":[]}");
+            }
+        }
+        catch
+        {
+            TryQueueEmergencyDriverReset();
+        }
+    }
+
+    private static void SendDriverRequestAndWait(
+        ClientWebSocket socket,
+        string id,
+        int type,
+        string data)
+    {
+        using (CancellationTokenSource timeout = new CancellationTokenSource(1800))
+        {
+            SendDriverRequest(socket, id, type, data, timeout.Token);
+            WaitForDriverResponse(socket, id, type, timeout.Token);
+        }
+    }
+
+    private static void TryQueueEmergencyDriverReset()
+    {
+        try
+        {
+            using (ClientWebSocket socket = new ClientWebSocket())
+            using (CancellationTokenSource timeout = new CancellationTokenSource(600))
+            {
+                socket.ConnectAsync(new Uri("ws://127.0.0.1:8083/entry"), timeout.Token)
+                    .GetAwaiter().GetResult();
+                SendDriverRequest(
+                    socket,
+                    "iyx-emergency-calibration-" + Guid.NewGuid().ToString("N"),
+                    51,
+                    "{\"Value\":false}",
+                    timeout.Token);
+                SendDriverRequest(
+                    socket,
+                    "iyx-emergency-watch-" + Guid.NewGuid().ToString("N"),
+                    50,
+                    "{\"Keys\":[]}",
+                    timeout.Token);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static void SendDriverRequest(
+        ClientWebSocket socket,
+        string id,
+        int type,
+        string data,
+        CancellationToken cancellationToken)
+    {
+        string message = "{\"ID\":\"" + id + "\",\"Type\":" + type + ",\"Data\":" + data + "}";
+        byte[] bytes = Encoding.UTF8.GetBytes(message);
+        socket.SendAsync(
+            new ArraySegment<byte>(bytes),
+            WebSocketMessageType.Text,
+            true,
+            cancellationToken).GetAwaiter().GetResult();
+    }
+
+    private static void WaitForDriverResponse(
+        ClientWebSocket socket,
+        string id,
+        int type,
+        CancellationToken cancellationToken)
+    {
+        byte[] buffer = new byte[4096];
+        JavaScriptSerializer serializer = new JavaScriptSerializer();
+        while (socket.State == WebSocketState.Open)
+        {
+            using (MemoryStream message = new MemoryStream())
+            {
+                WebSocketReceiveResult result;
+                do
+                {
+                    result = socket.ReceiveAsync(
+                        new ArraySegment<byte>(buffer),
+                        cancellationToken).GetAwaiter().GetResult();
+                    if (result.MessageType == WebSocketMessageType.Close)
+                        throw new InvalidOperationException("驱动服务在确认复位前关闭了连接。");
+                    message.Write(buffer, 0, result.Count);
+                }
+                while (!result.EndOfMessage);
+
+                if (result.MessageType != WebSocketMessageType.Text)
+                    continue;
+
+                string text = Encoding.UTF8.GetString(message.ToArray());
+                Dictionary<string, object> response;
+                try
+                {
+                    response = serializer.Deserialize<Dictionary<string, object>>(text);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (response == null)
+                    continue;
+
+                object responseId;
+                if (!response.TryGetValue("ID", out responseId)
+                    || !(responseId is string)
+                    || !string.Equals((string)responseId, id, StringComparison.Ordinal))
+                    continue;
+
+                object responseType;
+                long actualType;
+                if (!response.TryGetValue("Type", out responseType))
+                    throw new InvalidOperationException("驱动服务响应缺少复位类型。");
+                if (responseType is int)
+                    actualType = (int)responseType;
+                else if (responseType is long)
+                    actualType = (long)responseType;
+                else
+                    throw new InvalidOperationException("驱动服务返回了无效的复位响应类型。");
+                if (actualType != type)
+                    throw new InvalidOperationException("驱动服务返回了不匹配的复位响应类型。");
+
+                object error;
+                if (!response.TryGetValue("Error", out error) || !(error is string))
+                    throw new InvalidOperationException("驱动服务响应缺少有效的错误状态。");
+                if (!string.IsNullOrEmpty((string)error))
+                    throw new InvalidOperationException("驱动服务拒绝复位：" + (string)error);
+
+                return;
+            }
+        }
+
+        throw new InvalidOperationException("驱动服务未确认复位。");
+    }
+
     private static void WaitForLifetime(Process edge, string edgeProfile, Process iyx)
     {
         DateTime edgeEndedAt = DateTime.MinValue;
@@ -354,7 +563,9 @@ internal static class FastProgram
         private readonly byte[] sdk;
         private readonly Dictionary<string, byte[]> criticalAssets;
         private readonly HttpListener listener;
+        private readonly object keyboardToolLock = new object();
         private Thread acceptThread;
+        private Process keyboardTool;
         private volatile bool stopping;
         private int port;
 
@@ -365,6 +576,7 @@ internal static class FastProgram
             sdk = ReadResource(SdkResource);
             criticalAssets = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
             criticalAssets["assets/index-BQvZQSA6.js"] = PatchDriverScript(ReadZipEntry("Data/Local/IYXAST/apps/driver_script/assets/index-BQvZQSA6.js"));
+            criticalAssets["assets/root-CDQ7mKD4.js"] = PatchDriverRootScript(ReadZipEntry("Data/Local/IYXAST/apps/driver_script/assets/root-CDQ7mKD4.js"));
             criticalAssets["assets/base-rZDppeNp.js"] = ReadZipEntry("Data/Local/IYXAST/apps/driver_script/assets/base-rZDppeNp.js");
             criticalAssets["assets/sdk-keyboard-naj1DnVU.js"] = ReadZipEntry("Data/Local/IYXAST/apps/driver_script/assets/sdk-keyboard-naj1DnVU.js");
             criticalAssets["assets/index-CVrxRQtY.css"] = ReadZipEntry("Data/Local/IYXAST/apps/driver_script/assets/index-CVrxRQtY.css");
@@ -430,12 +642,15 @@ internal static class FastProgram
 
                 if (string.Equals(path, "__keyboard-check", StringComparison.OrdinalIgnoreCase))
                 {
-                    string tool = ExtractKeyboardTool(root);
-                    ProcessStartInfo info = new ProcessStartInfo(tool);
-                    info.WorkingDirectory = Path.GetDirectoryName(tool);
-                    info.UseShellExecute = true;
-                    Process.Start(info);
+                    StartKeyboardTool();
                     SendText(context, "keyboard-check started", 200);
+                    return;
+                }
+
+                if (string.Equals(path, "__driver-cleanup", StringComparison.OrdinalIgnoreCase))
+                {
+                    TryResetDriverState();
+                    SendText(context, "ok", 200);
                     return;
                 }
 
@@ -481,6 +696,21 @@ internal static class FastProgram
             }
         }
 
+        private void StartKeyboardTool()
+        {
+            lock (keyboardToolLock)
+            {
+                if (keyboardTool != null && !keyboardTool.HasExited)
+                    return;
+
+                string tool = ExtractKeyboardTool(root);
+                ProcessStartInfo info = new ProcessStartInfo(tool);
+                info.WorkingDirectory = Path.GetDirectoryName(tool);
+                info.UseShellExecute = true;
+                keyboardTool = Process.Start(info);
+            }
+        }
+
         private byte[] BuildIndexHtml()
         {
             string text;
@@ -502,7 +732,20 @@ internal static class FastProgram
 (function () {
   document.title = '\u827e\u5ca9\u5b9e\u7528\u8f6f\u4ef6';
   window.electronAPI = window.electronAPI || {
-    close: function () { window.close(); },
+    close: function () {
+      var closed = false;
+      var finish = function () {
+        if (closed) return;
+        closed = true;
+        window.close();
+      };
+      try {
+        fetch('/__driver-cleanup', { method: 'POST', cache: 'no-store' }).then(finish, finish);
+        setTimeout(finish, 2600);
+      } catch (error) {
+        finish();
+      }
+    },
     min: function () {},
     openDev: function () {},
     openExternal: function (url) { window.open(url, '_blank'); },
@@ -615,18 +858,64 @@ internal static class FastProgram
             string text = Encoding.UTF8.GetString(bytes);
             const string automaticCalibration = "initializeCalibrationState(){this.loadCalibrationStatus(),!this.state.initCalibrationStatus&&this.showCalibrationPageByVendor()}";
             const string skipAutomaticCalibration = "initializeCalibrationState(){this.loadCalibrationStatus()}";
-            if (text.IndexOf(automaticCalibration, StringComparison.Ordinal) >= 0)
-                text = text.Replace(automaticCalibration, skipAutomaticCalibration);
+            text = ReplaceExactlyOnce(
+                text,
+                automaticCalibration,
+                skipAutomaticCalibration,
+                "skip automatic calibration");
 
             const string delayedCurrentDevice = "const s=await this.askType(S.MTUsingDevice);if(s){if(await this.askDeviceKeys(),";
             const string earlyCurrentDevice = "const s=await this.askType(S.MTUsingDevice);if(s){if(I.instance.setCurrentDevice(s.ID),await this.askDeviceKeys(),";
-            if (text.IndexOf(delayedCurrentDevice, StringComparison.Ordinal) >= 0)
-                text = text.Replace(delayedCurrentDevice, earlyCurrentDevice);
+            text = ReplaceExactlyOnce(
+                text,
+                delayedCurrentDevice,
+                earlyCurrentDevice,
+                "initialize current device before key definitions");
 
             const string duplicateCurrentDevice = "if(I.instance.setCurrentDevice(s.ID),U.checkFirmwareUpdate(),";
-            if (text.IndexOf(duplicateCurrentDevice, StringComparison.Ordinal) >= 0)
-                text = text.Replace(duplicateCurrentDevice, "if(U.checkFirmwareUpdate(),");
+            text = ReplaceExactlyOnce(
+                text,
+                duplicateCurrentDevice,
+                "if(U.checkFirmwareUpdate(),",
+                "remove duplicate current device update");
             return Encoding.UTF8.GetBytes(text);
+        }
+
+        private static byte[] PatchDriverRootScript(byte[] bytes)
+        {
+            string text = Encoding.UTF8.GetString(bytes);
+            const string calibrationUnmount = "Kn=A({__name:\"calibration\",setup(v){return be(()=>{U.pauseDynamicImageForCalibration()}),Ge(()=>{U.resumeDynamicImageAfterCalibration()}),";
+            const string patchedCalibrationUnmount = "Kn=A({__name:\"calibration\",setup(v){return be(()=>{U.pauseDynamicImageForCalibration()}),Ge(()=>{Promise.resolve(U.calibrationAllKeys(!1)).catch(()=>{}).finally(()=>Promise.resolve(U.endAllKeysWatchTrave()).catch(()=>{})),U.resumeDynamicImageAfterCalibration()}),";
+            text = ReplaceExactlyOnce(
+                text,
+                calibrationUnmount,
+                patchedCalibrationUnmount,
+                "clean up calibration when its view unmounts");
+
+            const string rootCleanup = "function nu(){Bt.clear(),U.resetCalibrationStatus(),z.fnCheck.value=!1,Vs.state.rateValue=0,z.changeActionType(T.none),De.clear(),gi.isShowLeft=!1,Ie.state.isShowSetKeyGroup=!1,Mt.value=!1}";
+            const string patchedRootCleanup = "const iyxFastCleanupCalibration=()=>{try{He.instance.getSocketService.send({ID:\"iyx-page-calibration-\"+Date.now(),Type:st.MTMagnetCalibratin,Data:{Value:!1}})}catch{}try{He.instance.getSocketService.send({ID:\"iyx-page-watch-\"+Date.now(),Type:st.MTMagnetSetWatch,Data:{Keys:[]}})}catch{}U.clearDynamicImagePauseForCalibration()};window.addEventListener(\"pagehide\",iyxFastCleanupCalibration,!0),window.addEventListener(\"beforeunload\",iyxFastCleanupCalibration,!0);function nu(){Bt.clear(),U.resetCalibrationStatus(),z.fnCheck.value=!1,Vs.state.rateValue=0,z.changeActionType(T.none),De.clear(),gi.isShowLeft=!1,Ie.state.isShowSetKeyGroup=!1,Mt.value=!1}";
+            text = ReplaceExactlyOnce(
+                text,
+                rootCleanup,
+                patchedRootCleanup,
+                "clean up calibration when the driver page closes");
+            return Encoding.UTF8.GetBytes(text);
+        }
+
+        private static string ReplaceExactlyOnce(
+            string text,
+            string oldValue,
+            string newValue,
+            string patchName)
+        {
+            int index = text.IndexOf(oldValue, StringComparison.Ordinal);
+            if (index < 0)
+                throw new InvalidOperationException("驱动资源补丁不匹配：" + patchName);
+            if (text.IndexOf(oldValue, index + oldValue.Length, StringComparison.Ordinal) >= 0)
+                throw new InvalidOperationException("驱动资源补丁命中多次：" + patchName);
+            return text.Substring(0, index)
+                + newValue
+                + text.Substring(index + oldValue.Length);
         }
 
         private static ZipArchive OpenArchive()
@@ -655,6 +944,11 @@ internal static class FastProgram
         public void Dispose()
         {
             stopping = true;
+            lock (keyboardToolLock)
+            {
+                StopProcess(keyboardTool);
+                keyboardTool = null;
+            }
             try { listener.Stop(); } catch { }
             try { listener.Close(); } catch { }
             if (acceptThread != null && acceptThread.IsAlive)

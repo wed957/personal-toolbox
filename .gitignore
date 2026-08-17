@@ -1,0 +1,38 @@
+# Build output
+*.exe
+*.pdb
+*.log
+*.tmp
+
+# Large archives: keep only the current payload through Git LFS
+*.zip
+!Payload.zip
+
+# Screenshots and generated icon previews
+*.png
+!IYX-icon-v6-trigger-preview.png
+
+# Generated and historical icon assets
+*.ico
+!IYX.ico
+!IYX-icon-v6-trigger.ico
+icon-check/
+icon-*-frames/
+GenerateIconV[2-5].cs
+
+# Runtime and benchmark workspaces
+app-current/
+edge-light-profile/
+edge-test-profile/
+light-stage/
+
+# Superseded prototypes and extracted bundles
+Launcher.cs
+driver-main.js
+
+# Editor and operating-system files
+.vs/
+.vscode/
+*.user
+Thumbs.db
+Desktop.ini

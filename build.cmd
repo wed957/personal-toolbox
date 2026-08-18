@@ -3,6 +3,7 @@ setlocal
 
 set "ROOT=%~dp0"
 set "TOOLCHAIN=C:\Users\Administrator\scoop\apps\mingw\current\bin"
+if defined MUX_TOOLCHAIN set "TOOLCHAIN=%MUX_TOOLCHAIN%"
 set "CXX=%TOOLCHAIN%\g++.exe"
 set "WINDRES=%TOOLCHAIN%\windres.exe"
 

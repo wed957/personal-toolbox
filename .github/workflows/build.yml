@@ -15,6 +15,8 @@ jobs:
           static: 0
       - name: Build
         shell: cmd
+        env:
+          MUX_TOOLCHAIN: C:\ProgramData\mingw64\mingw64\bin
         run: build.cmd
       - uses: actions/upload-artifact@v4
         with:

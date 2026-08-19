@@ -1,0 +1,26 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: egor-tensin/setup-mingw@v2
+        with:
+          platform: x64
+          static: 0
+      - name: Build
+        shell: cmd
+        env:
+          MUX_TOOLCHAIN: C:\ProgramData\mingw64\mingw64\bin
+        run: build.cmd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MUX-windows-x64
+          path: |
+            dist/MUX.exe
+            dist/MUX-cli.exe

@@ -23,9 +23,36 @@ if ($hash -ne '2EF56DF4F0A3D5A53FB790794A55F199165B120A0D22BD2E6ADFA9AD516B3517'
     throw "Keyboard-check hash mismatch: $hash"
 }
 
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$payload = Join-Path $repo 'components\iyx-fast-launcher\Payload.zip'
+$archive = [System.IO.Compression.ZipFile]::OpenRead($payload)
+try {
+    $entry = $archive.GetEntry('tools/keyboard-check.exe')
+    if ($null -eq $entry) { throw 'IYX payload is missing the keyboard-check tool' }
+    $stream = $entry.Open()
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $embeddedHash = ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '')
+        } finally {
+            $sha256.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+} finally {
+    $archive.Dispose()
+}
+if ($embeddedHash -ne $hash) {
+    throw "IYX embedded keyboard-check hash mismatch: $embeddedHash"
+}
+
 Assert-Path (Join-Path $dist 'Toolbox.exe')
-foreach ($name in @('icc-switch-gui.exe', 'icc-switch-cli.exe', 'MUX.exe', 'MUX-cli.exe', 'IYX.exe', 'keyboard-check.exe')) {
+foreach ($name in @('icc-switch-gui.exe', 'icc-switch-cli.exe', 'MUX.exe', 'MUX-cli.exe', 'IYX.exe')) {
     Assert-Path (Join-Path $dist "tools\$name")
+}
+if (Test-Path -LiteralPath (Join-Path $dist 'tools\keyboard-check.exe')) {
+    throw 'Standalone keyboard-check must not be duplicated in dist\tools'
 }
 
 $toolboxRun = Start-Process -FilePath (Join-Path $dist 'Toolbox.exe') -ArgumentList '--check' -Wait -PassThru

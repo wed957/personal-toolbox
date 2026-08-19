@@ -40,7 +40,8 @@ echo [4/5] Compiling unified launcher...
 "%CXX%" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Wno-cast-function-type ^
   -municode -mwindows -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX ^
   -finput-charset=UTF-8 "%ROOT%src\toolbox_launcher.cpp" ^
-  -o "%ROOT%dist\Toolbox.exe" -lshell32 -luser32 -static-libgcc -static-libstdc++
+  -o "%ROOT%dist\Toolbox.exe" -lgdiplus -ldwmapi -lshell32 -luser32 ^
+  -static-libgcc -static-libstdc++
 if errorlevel 1 exit /b 1
 
 echo [5/5] Collecting tools...
@@ -49,7 +50,7 @@ copy /y "%ROOT%components\icc-switch\build\icc-switch.exe" "%ROOT%dist\tools\icc
 copy /y "%ROOT%components\mux-display-switcher\dist\MUX.exe" "%ROOT%dist\tools\MUX.exe" >nul || exit /b 1
 copy /y "%ROOT%components\mux-display-switcher\dist\MUX-cli.exe" "%ROOT%dist\tools\MUX-cli.exe" >nul || exit /b 1
 copy /y "%ROOT%components\iyx-fast-launcher\IYX.exe" "%ROOT%dist\tools\IYX.exe" >nul || exit /b 1
-copy /y "%ROOT%components\keyboard-check\键盘检查.exe" "%ROOT%dist\tools\keyboard-check.exe" >nul || exit /b 1
+if exist "%ROOT%dist\tools\keyboard-check.exe" del /q "%ROOT%dist\tools\keyboard-check.exe"
 
 if not exist "%ROOT%dist\Toolbox.exe" exit /b 1
 echo Build complete: %ROOT%dist

@@ -1,0 +1,14 @@
+# Local build output
+build/
+
+# IDE and tool state
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Temporary and diagnostic files
+*.log
+*.tmp
+*.bak
+_small-preview.png

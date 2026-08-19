@@ -17,13 +17,14 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("IYX 驱动界面绿色版")]
 [assembly: AssemblyCompany("IYX Green")]
 [assembly: AssemblyProduct("IYX绿色版")]
-[assembly: AssemblyVersion("3.0.1.0")]
-[assembly: AssemblyFileVersion("3.0.1.0")]
+[assembly: AssemblyVersion("3.0.2.0")]
+[assembly: AssemblyFileVersion("3.0.2.0")]
 
 internal static class FastProgram
 {
     private const string PayloadResource = "IYX.Payload.zip";
     private const string SdkResource = "IYX.Sdk.js";
+    private const string InstanceMutexName = "Local\\IYXFastLauncher.SingleInstance";
     private static readonly object extractionLock = new object();
 
     [STAThread]
@@ -39,6 +40,25 @@ internal static class FastProgram
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
+        bool ownsInstance;
+        using (Mutex instanceMutex = new Mutex(true, InstanceMutexName, out ownsInstance))
+        {
+            if (!ownsInstance)
+            {
+                MessageBox.Show(
+                    "IYX绿色版已经在运行。",
+                    "IYX绿色版",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            RunLauncher();
+        }
+    }
+
+    private static void RunLauncher()
+    {
         string root = Path.Combine(
             Path.GetTempPath(),
             "IYXFast_" + Process.GetCurrentProcess().Id + "_" + Guid.NewGuid().ToString("N"));
@@ -53,6 +73,7 @@ internal static class FastProgram
 
         try
         {
+            StopStaleDriverServices(stateRoot);
             Directory.CreateDirectory(root);
 
             server = new PayloadServer(root);
@@ -106,15 +127,35 @@ internal static class FastProgram
 
     private static void VerifyPayloadPatches()
     {
+        string verificationRoot = Path.Combine(
+            Path.GetTempPath(),
+            "IYXVerify_" + Process.GetCurrentProcess().Id + "_" + Guid.NewGuid().ToString("N"));
         try
         {
             using (PayloadServer server = new PayloadServer(Path.GetTempPath()))
             {
             }
+
+            string bootRoot = Path.Combine(verificationRoot, "Boot");
+            string stateRoot = Path.Combine(verificationRoot, "State");
+            PrepareBootFiles(bootRoot, stateRoot);
+
+            string magnet = Path.Combine(
+                stateRoot,
+                "Data", "Local", "IYXAST", "apps", "driver_service", "dlls", "magnet0.dll");
+            using (FileStream locked = new FileStream(
+                magnet, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                PrepareBootFiles(bootRoot, stateRoot);
+            }
         }
         catch
         {
             Environment.ExitCode = 1;
+        }
+        finally
+        {
+            TryDeleteDirectory(verificationRoot);
         }
     }
 
@@ -177,24 +218,107 @@ internal static class FastProgram
                     string target = Path.Combine(root, name.Replace('/', Path.DirectorySeparatorChar));
                     if (preserveExisting != null && preserveExisting(name) && File.Exists(target))
                         continue;
+                    if (CanReuseExistingFile(target, entry.Length))
+                        continue;
 
                     string parent = Path.GetDirectoryName(target);
                     if (!string.IsNullOrEmpty(parent))
                         Directory.CreateDirectory(parent);
 
-                    using (Stream input = entry.Open())
-                    using (FileStream output = new FileStream(
-                        target,
-                        FileMode.Create,
-                        FileAccess.Write,
-                        FileShare.None,
-                        1024 * 1024,
-                        FileOptions.SequentialScan))
+                    WriteEntryWithRetry(entry, target);
+                }
+            }
+        }
+    }
+
+    private static bool CanReuseExistingFile(string path, long expectedLength)
+    {
+        try
+        {
+            return File.Exists(path) && new FileInfo(path).Length == expectedLength;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void WriteEntryWithRetry(ZipArchiveEntry entry, string target)
+    {
+        Exception lastError = null;
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            if (CanReuseExistingFile(target, entry.Length))
+                return;
+
+            try
+            {
+                using (Stream input = entry.Open())
+                using (FileStream output = new FileStream(
+                    target,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    1024 * 1024,
+                    FileOptions.SequentialScan))
+                {
+                    input.CopyTo(output, 1024 * 1024);
+                }
+                return;
+            }
+            catch (IOException ex)
+            {
+                lastError = ex;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                lastError = ex;
+            }
+
+            Thread.Sleep(100);
+        }
+
+        throw new IOException("无法更新启动文件：" + target, lastError);
+    }
+
+    private static void StopStaleDriverServices(string stateRoot)
+    {
+        string serviceDirectory = Path.GetFullPath(Path.Combine(
+            stateRoot, "Data", "Local", "IYXAST", "apps", "driver_service"))
+            .TrimEnd(Path.DirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+
+        try
+        {
+            using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                "SELECT ProcessId, ExecutablePath FROM Win32_Process WHERE Name='driver.service.exe'"))
+            using (ManagementObjectCollection processes = searcher.Get())
+            {
+                foreach (ManagementObject item in processes)
+                {
+                    try
                     {
-                        input.CopyTo(output, 1024 * 1024);
+                        string executablePath = item["ExecutablePath"] as string;
+                        if (string.IsNullOrEmpty(executablePath)
+                            || !Path.GetFullPath(executablePath).StartsWith(
+                                serviceDirectory, StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        int processId = Convert.ToInt32(item["ProcessId"]);
+                        using (Process stale = Process.GetProcessById(processId))
+                        {
+                            stale.Kill();
+                            stale.WaitForExit(3000);
+                        }
+                    }
+                    catch
+                    {
                     }
                 }
             }
+        }
+        catch
+        {
         }
     }
 
@@ -531,7 +655,10 @@ internal static class FastProgram
         try
         {
             if (process != null && !process.HasExited)
+            {
                 process.Kill();
+                process.WaitForExit(3000);
+            }
         }
         catch
         {

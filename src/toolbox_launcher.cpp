@@ -243,7 +243,11 @@ void draw_text(Graphics& graphics, const std::wstring& text, const wchar_t* fami
                float size, int style, const Color& color, const RectF& bounds,
                StringAlignment alignment = StringAlignmentNear,
                bool wrap = false) {
-    Font font(family, size, style, UnitPixel);
+    const auto snap = [](float value) { return std::floor(value + 0.5f); };
+    const RectF aligned_bounds(snap(bounds.X), snap(bounds.Y),
+                               snap(bounds.Width), snap(bounds.Height));
+    const float aligned_size = std::floor(size * 2.0f + 0.5f) / 2.0f;
+    Font font(family, aligned_size, style, UnitPixel);
     SolidBrush brush(color);
     StringFormat format;
     format.SetAlignment(alignment);
@@ -252,7 +256,12 @@ void draw_text(Graphics& graphics, const std::wstring& text, const wchar_t* fami
     if (!wrap) {
         format.SetFormatFlags(StringFormatFlagsNoWrap);
     }
-    graphics.DrawString(text.c_str(), -1, &font, bounds, &format, &brush);
+    const TextRenderingHint previous_hint = graphics.GetTextRenderingHint();
+    graphics.SetTextRenderingHint(aligned_size >= 24.0f
+                                      ? TextRenderingHintAntiAliasGridFit
+                                      : TextRenderingHintClearTypeGridFit);
+    graphics.DrawString(text.c_str(), -1, &font, aligned_bounds, &format, &brush);
+    graphics.SetTextRenderingHint(previous_hint);
 }
 
 float window_scale(HWND window) {
@@ -419,7 +428,7 @@ void draw_folder_control(Graphics& graphics, const Layout& layout) {
                20.0f * scale, 20.0f * scale);
     draw_lucide_icon(graphics, LucideIcon::FolderOpen, icon,
                      make_color(0xFFFFFF), 1.8f);
-    draw_text(graphics, L"打开工具目录", L"Microsoft YaHei UI", 13.0f * scale,
+    draw_text(graphics, L"打开工具目录", L"Microsoft YaHei UI", 14.0f * scale,
               FontStyleRegular, make_color(0xFFFFFF),
               RectF(rect.X + 45.0f * scale, rect.Y + 10.0f * scale,
                     rect.Width - 55.0f * scale, 24.0f * scale));
@@ -444,7 +453,7 @@ void draw_header(Graphics& graphics, float width, const Layout& layout) {
               RectF(padding, 104.0f * scale + title_offset,
                     width * 0.62f, 90.0f * scale));
     draw_text(graphics, L"DISPLAY  /  COLOR  /  DRIVER", L"Bahnschrift",
-              13.0f * scale, FontStyleRegular, make_color(0x4C5048, intro_alpha),
+              14.0f * scale, FontStyleRegular, make_color(0x343730, intro_alpha),
               RectF(padding + 3.0f * scale, 190.0f * scale + title_offset,
                     width * 0.55f, 28.0f * scale));
 
@@ -455,7 +464,7 @@ void draw_header(Graphics& graphics, float width, const Layout& layout) {
               make_color(0x10110F, 20),
               RectF(number_x, 87.0f * scale, 190.0f * scale, 110.0f * scale),
               StringAlignmentFar);
-    draw_text(graphics, L"ACTIVE MODULES", L"Bahnschrift", 10.0f * scale,
+    draw_text(graphics, L"ACTIVE MODULES", L"Bahnschrift", 11.0f * scale,
               FontStyleBold, make_color(0x10110F, 145),
               RectF(width - 260.0f * scale, 202.0f * scale,
                     220.0f * scale, 20.0f * scale), StringAlignmentFar);
@@ -492,9 +501,9 @@ void draw_tool_card(Graphics& graphics, const Layout& layout, int index) {
     }
 
     const Color foreground = make_color(tool.foreground);
-    const Color quiet = make_color(tool.foreground, 155);
+    const Color quiet = make_color(tool.foreground, 215);
     const float inset = 20.0f * scale;
-    draw_text(graphics, tool.eyebrow, L"Bahnschrift", 10.0f * scale,
+    draw_text(graphics, tool.eyebrow, L"Bahnschrift", 11.0f * scale,
               FontStyleBold, quiet,
               RectF(rect.X + inset, rect.Y + 21.0f * scale,
                     rect.Width - inset * 2.0f, 18.0f * scale));
@@ -508,7 +517,7 @@ void draw_tool_card(Graphics& graphics, const Layout& layout, int index) {
               FontStyleBold, foreground,
               RectF(rect.X + inset, rect.Y + 88.0f * scale,
                     rect.Width - inset * 2.0f, 42.0f * scale));
-    draw_text(graphics, tool.description, L"Microsoft YaHei UI", 13.0f * scale,
+    draw_text(graphics, tool.description, L"Microsoft YaHei UI", 14.0f * scale,
               FontStyleRegular, quiet,
               RectF(rect.X + inset, rect.Y + 132.0f * scale,
                     rect.Width - inset * 2.0f, 52.0f * scale),
@@ -526,7 +535,7 @@ void draw_tool_card(Graphics& graphics, const Layout& layout, int index) {
                            16.0f * scale, 16.0f * scale),
                      foreground, 1.8f);
     draw_text(graphics, g_present[index] ? tool.meta : L"MODULE MISSING",
-              L"Bahnschrift", 9.5f * scale, FontStyleBold, quiet,
+              L"Bahnschrift", 10.5f * scale, FontStyleBold, quiet,
               RectF(rect.X + inset + 24.0f * scale, footer_y + 16.0f * scale,
                     rect.Width - 92.0f * scale, 20.0f * scale));
 
@@ -550,7 +559,7 @@ void draw_status_bar(Graphics& graphics, float width, float height,
                      RectF(padding, layout.status_y + 22.0f * scale,
                            icon_size, icon_size),
                      make_color(status_color, pulse_alpha), 1.8f);
-    draw_text(graphics, g_status, L"Microsoft YaHei UI", 12.0f * scale,
+    draw_text(graphics, g_status, L"Microsoft YaHei UI", 13.0f * scale,
               FontStyleRegular, make_color(0x343730),
               RectF(padding + 28.0f * scale, layout.status_y + 20.0f * scale,
                     width * 0.65f, 25.0f * scale));
@@ -567,11 +576,12 @@ void render(HWND window, HDC target) {
     GetClientRect(window, &client);
     const int width = std::max(1L, client.right - client.left);
     const int height = std::max(1L, client.bottom - client.top);
-    Bitmap buffer(width, height, PixelFormat32bppPARGB);
+    Bitmap buffer(width, height, PixelFormat32bppRGB);
     Graphics graphics(&buffer);
     graphics.SetSmoothingMode(SmoothingModeAntiAlias);
     graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
-    graphics.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
+    graphics.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
+    graphics.SetTextContrast(0);
 
     const Layout layout = calculate_layout(window);
     draw_background(graphics, static_cast<float>(width), static_cast<float>(height), layout);
@@ -582,7 +592,8 @@ void render(HWND window, HDC target) {
     draw_status_bar(graphics, static_cast<float>(width), static_cast<float>(height), layout);
 
     Graphics output(target);
-    output.DrawImage(&buffer, 0, 0, width, height);
+    output.SetCompositingMode(CompositingModeSourceCopy);
+    output.DrawImage(&buffer, 0, 0);
 }
 
 bool point_in_rect(const RectF& rect, POINT point) {

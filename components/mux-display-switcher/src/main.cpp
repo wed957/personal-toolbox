@@ -1,5 +1,6 @@
 #include "display_manager.hpp"
 #include "../resource.h"
+#include "../../../src/toolbox_theme.hpp"
 
 #include <commctrl.h>
 
@@ -19,6 +20,7 @@ using mux::ApplyRequest;
 using mux::DisplayManager;
 using mux::DisplaySnapshot;
 using mux::OperationResult;
+namespace theme = toolbox_theme;
 
 namespace {
 
@@ -79,6 +81,10 @@ public:
     int Run(int show_command) {
         INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
         InitCommonControlsEx(&controls);
+        large_icon_ = theme::create_app_icon(32, theme::Icon::Panels,
+                                             theme::kBlue);
+        small_icon_ = theme::create_app_icon(16, theme::Icon::Panels,
+                                             theme::kBlue);
 
         WNDCLASSEXW window_class{};
         window_class.cbSize = sizeof(window_class);
@@ -86,24 +92,17 @@ public:
         window_class.lpfnWndProc = WindowProc;
         window_class.hInstance = instance_;
         window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        window_class.hIcon = static_cast<HICON>(LoadImageW(
-            instance_, MAKEINTRESOURCEW(IDI_MUX), IMAGE_ICON,
-            GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON),
-            LR_DEFAULTCOLOR));
-        window_class.hIconSm = static_cast<HICON>(LoadImageW(
-            instance_, MAKEINTRESOURCEW(IDI_MUX), IMAGE_ICON,
-            GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
-            LR_DEFAULTCOLOR));
-        window_class.hbrBackground =
-            reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        window_class.hIcon = large_icon_;
+        window_class.hIconSm = small_icon_;
+        window_class.hbrBackground = nullptr;
         window_class.lpszClassName = kWindowClass;
         if (RegisterClassExW(&window_class) == 0) {
             return 1;
         }
 
         window_ = CreateWindowExW(
-            0, kWindowClass, L"MUX", WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT, CW_USEDEFAULT, 760, 590, nullptr, nullptr, instance_,
+            0, kWindowClass, L"MUX / DISPLAY ROUTING", WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT, CW_USEDEFAULT, 980, 700, nullptr, nullptr, instance_,
             this);
         if (window_ == nullptr) {
             return 2;
@@ -168,12 +167,28 @@ private:
             case WM_DPICHANGED:
                 OnDpiChanged(wparam, lparam);
                 return 0;
+            case WM_PAINT:
+                Paint();
+                return 0;
+            case WM_ERASEBKGND:
+                return 1;
             case WM_COMMAND:
                 OnCommand(LOWORD(wparam));
                 return 0;
-            case WM_NOTIFY:
-                OnNotify(reinterpret_cast<NMHDR*>(lparam));
+            case WM_NOTIFY: {
+                const auto* notification = reinterpret_cast<NMHDR*>(lparam);
+                const LRESULT custom_draw = OnCustomDraw(notification);
+                if (custom_draw != -1) {
+                    return custom_draw;
+                }
+                OnNotify(notification);
                 return 0;
+            }
+            case WM_DRAWITEM:
+                return DrawButton(reinterpret_cast<const DRAWITEMSTRUCT*>(lparam));
+            case WM_CTLCOLORSTATIC:
+                return ColorStatic(reinterpret_cast<HDC>(wparam),
+                                   reinterpret_cast<HWND>(lparam));
             case WM_TIMER:
                 if (wparam == kJobPollTimer) {
                     if (job_ready_.load(std::memory_order_acquire)) {
@@ -206,8 +221,8 @@ private:
                 return 0;
             case WM_GETMINMAXINFO: {
                 auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
-                limits->ptMinTrackSize.x = Scale(620, dpi_);
-                limits->ptMinTrackSize.y = Scale(480, dpi_);
+                limits->ptMinTrackSize.x = Scale(780, dpi_);
+                limits->ptMinTrackSize.y = Scale(620, dpi_);
                 return 0;
             }
             case WM_CLOSE:
@@ -219,6 +234,11 @@ private:
                 KillTimer(window_, kJobPollTimer);
                 DeleteObject(font_);
                 DeleteObject(title_font_);
+                DeleteObject(display_font_);
+                DeleteObject(eyebrow_font_);
+                DeleteObject(canvas_brush_);
+                DestroyIcon(large_icon_);
+                DestroyIcon(small_icon_);
                 font_ = nullptr;
                 title_font_ = nullptr;
                 PostQuitMessage(0);
@@ -230,16 +250,18 @@ private:
 
     bool OnCreate() {
         dpi_ = GetDpiForWindow(window_);
+        canvas_brush_ = CreateSolidBrush(theme::kCanvas);
         CreateFonts();
+        theme::style_title_bar(window_);
 
-        title_ = CreateControl(L"STATIC", L"MUX", SS_LEFT, kTitle);
+        title_ = CreateControl(L"STATIC", L"", SS_LEFT, kTitle);
         subtitle_ = CreateControl(
-            L"STATIC", L"选择要保留在 Windows 桌面中的显示器",
+            L"STATIC", L"",
             SS_LEFT, kSubtitle);
         only_button_ = CreateControl(
-            L"BUTTON", L"仅保留 P25W2GC", BS_PUSHBUTTON, kOnlyTarget);
+            L"BUTTON", L"仅保留 P25W2GC", BS_OWNERDRAW, kOnlyTarget);
         list_ = CreateWindowExW(
-            WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+            0, WC_LISTVIEWW, L"",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT |
                 LVS_SINGLESEL | LVS_SHOWSELALWAYS,
             0, 0, 0, 0, window_, reinterpret_cast<HMENU>(kDisplayList),
@@ -247,13 +269,13 @@ private:
         status_ = CreateControl(L"STATIC", L"正在读取显示器…", SS_LEFT,
                                 kStatus);
         enable_all_button_ = CreateControl(
-            L"BUTTON", L"全部启用", BS_PUSHBUTTON, kEnableAll);
+            L"BUTTON", L"全部启用", BS_OWNERDRAW, kEnableAll);
         restore_button_ = CreateControl(
-            L"BUTTON", L"恢复扩展布局", BS_PUSHBUTTON, kRestore);
+            L"BUTTON", L"恢复扩展布局", BS_OWNERDRAW, kRestore);
         refresh_button_ =
-            CreateControl(L"BUTTON", L"刷新", BS_PUSHBUTTON, kRefresh);
+            CreateControl(L"BUTTON", L"刷新", BS_OWNERDRAW, kRefresh);
         apply_button_ = CreateControl(
-            L"BUTTON", L"应用所选", BS_DEFPUSHBUTTON, kApply);
+            L"BUTTON", L"应用所选", BS_OWNERDRAW, kApply);
 
         if (list_ == nullptr || apply_button_ == nullptr) {
             return false;
@@ -269,6 +291,9 @@ private:
         ListView_SetExtendedListViewStyle(
             list_, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
                        LVS_EX_LABELTIP);
+        ListView_SetBkColor(list_, theme::kPaper);
+        ListView_SetTextBkColor(list_, theme::kPaper);
+        ListView_SetTextColor(list_, theme::kInk);
         LVCOLUMNW column{};
         column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
         column.pszText = const_cast<wchar_t*>(L"显示器");
@@ -303,18 +328,12 @@ private:
     }
 
     void CreateFonts() {
-        NONCLIENTMETRICSW metrics{};
-        metrics.cbSize = sizeof(metrics);
-        SystemParametersInfoW(
-            SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0);
-        metrics.lfMessageFont.lfHeight = -Scale(15, dpi_);
-        wcscpy_s(metrics.lfMessageFont.lfFaceName, L"Segoe UI");
-        font_ = CreateFontIndirectW(&metrics.lfMessageFont);
-
-        LOGFONTW title = metrics.lfMessageFont;
-        title.lfHeight = -Scale(25, dpi_);
-        title.lfWeight = FW_SEMIBOLD;
-        title_font_ = CreateFontIndirectW(&title);
+        font_ = theme::create_font(dpi_, 14, FW_NORMAL);
+        title_font_ = theme::create_font(dpi_, 46, FW_BOLD);
+        display_font_ = theme::create_font(dpi_, 18, FW_SEMIBOLD,
+                                           L"Bahnschrift");
+        eyebrow_font_ = theme::create_font(dpi_, 11, FW_BOLD,
+                                           L"Bahnschrift");
     }
 
     void OnDpiChanged(WPARAM wparam, LPARAM lparam) {
@@ -328,6 +347,8 @@ private:
 
         DeleteObject(font_);
         DeleteObject(title_font_);
+        DeleteObject(display_font_);
+        DeleteObject(eyebrow_font_);
         CreateFonts();
         for (HWND control : AllControls()) {
             SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_),
@@ -347,42 +368,146 @@ private:
         GetClientRect(window_, &client);
         const int width = client.right;
         const int height = client.bottom;
-        const int margin = Scale(24, dpi_);
+        const int margin = Scale(56, dpi_);
         const int content_width = std::max(0, width - margin * 2);
 
-        MoveWindow(title_, margin, Scale(20, dpi_), content_width,
-                   Scale(34, dpi_), TRUE);
-        MoveWindow(subtitle_, margin, Scale(55, dpi_), content_width,
-                   Scale(24, dpi_), TRUE);
-        MoveWindow(only_button_, margin, Scale(88, dpi_), content_width,
-                   Scale(48, dpi_), TRUE);
+        MoveWindow(title_, 0, 0, 0, 0, FALSE);
+        MoveWindow(subtitle_, 0, 0, 0, 0, FALSE);
+        MoveWindow(only_button_, margin, Scale(226, dpi_), content_width,
+                   Scale(54, dpi_), TRUE);
 
-        const int bottom_buttons_y = height - Scale(58, dpi_);
-        const int status_y = bottom_buttons_y - Scale(32, dpi_);
-        const int list_y = Scale(153, dpi_);
+        const int bottom_buttons_y = height - Scale(74, dpi_);
+        const int status_y = bottom_buttons_y - Scale(42, dpi_);
+        const int list_y = Scale(304, dpi_);
         MoveWindow(list_, margin, list_y, content_width,
-                   std::max(Scale(120, dpi_), status_y - list_y - Scale(8, dpi_)),
+                   std::max(Scale(150, dpi_), status_y - list_y - Scale(12, dpi_)),
                    TRUE);
         MoveWindow(status_, margin, status_y, content_width, Scale(24, dpi_),
                    TRUE);
 
-        const int gap = Scale(8, dpi_);
-        const int small = Scale(112, dpi_);
-        const int apply_width = Scale(132, dpi_);
+        const int gap = Scale(12, dpi_);
+        const int small = Scale(142, dpi_);
+        const int apply_width = Scale(168, dpi_);
         MoveWindow(enable_all_button_, margin, bottom_buttons_y, small,
-                   Scale(36, dpi_), TRUE);
+                   Scale(48, dpi_), TRUE);
         MoveWindow(restore_button_, margin + small + gap, bottom_buttons_y,
-                   Scale(140, dpi_), Scale(36, dpi_), TRUE);
+                   Scale(176, dpi_), Scale(48, dpi_), TRUE);
         MoveWindow(refresh_button_,
-                   width - margin - apply_width - gap - Scale(92, dpi_),
-                   bottom_buttons_y, Scale(92, dpi_), Scale(36, dpi_), TRUE);
+                   width - margin - apply_width - gap - Scale(132, dpi_),
+                   bottom_buttons_y, Scale(132, dpi_), Scale(48, dpi_), TRUE);
         MoveWindow(apply_button_, width - margin - apply_width, bottom_buttons_y,
-                   apply_width, Scale(36, dpi_), TRUE);
+                   apply_width, Scale(48, dpi_), TRUE);
 
         ListView_SetColumnWidth(list_, 0, std::max(Scale(220, dpi_),
-                                                   content_width - Scale(310, dpi_)));
-        ListView_SetColumnWidth(list_, 1, Scale(105, dpi_));
-        ListView_SetColumnWidth(list_, 2, Scale(185, dpi_));
+                                                   content_width - Scale(340, dpi_)));
+        ListView_SetColumnWidth(list_, 1, Scale(115, dpi_));
+        ListView_SetColumnWidth(list_, 2, Scale(210, dpi_));
+    }
+
+    void Paint() {
+        PAINTSTRUCT paint{};
+        HDC target = BeginPaint(window_, &paint);
+        RECT client{};
+        GetClientRect(window_, &client);
+        const int width = std::max(1L, client.right);
+        const int height = std::max(1L, client.bottom);
+        HDC memory = CreateCompatibleDC(target);
+        HBITMAP bitmap = CreateCompatibleBitmap(target, width, height);
+        const HGDIOBJ old_bitmap = SelectObject(memory, bitmap);
+
+        theme::draw_grid(memory, client, dpi_, theme::kBlue);
+        const int margin = Scale(56, dpi_);
+        RECT eyebrow{margin, Scale(25, dpi_), width - margin, Scale(55, dpi_)};
+        theme::draw_text(memory, L"DISPLAY / TOPOLOGY ROUTING", eyebrow,
+                         eyebrow_font_, theme::kInk);
+        RECT title{margin, Scale(105, dpi_), width - margin, Scale(175, dpi_)};
+        theme::draw_text(memory, L"MUX", title, title_font_, theme::kInk,
+                         DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        RECT subtitle{margin, Scale(174, dpi_), width - margin, Scale(207, dpi_)};
+        theme::draw_text(memory, L"显示拓扑与屏幕布局 / WINDOWS", subtitle,
+                         display_font_, theme::kMuted);
+        RECT index{width - Scale(210, dpi_), Scale(104, dpi_),
+                   width - margin, Scale(180, dpi_)};
+        theme::draw_text(memory, L"02", index, title_font_,
+                         RGB(215, 218, 211),
+                         DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
+        HPEN separator = CreatePen(PS_SOLID, 1, theme::kLine);
+        const HGDIOBJ old_pen = SelectObject(memory, separator);
+        MoveToEx(memory, 0, height - Scale(96, dpi_), nullptr);
+        LineTo(memory, width, height - Scale(96, dpi_));
+        SelectObject(memory, old_pen);
+        DeleteObject(separator);
+
+        BitBlt(target, 0, 0, width, height, memory, 0, 0, SRCCOPY);
+        SelectObject(memory, old_bitmap);
+        DeleteObject(bitmap);
+        DeleteDC(memory);
+        EndPaint(window_, &paint);
+    }
+
+    LRESULT DrawButton(const DRAWITEMSTRUCT* item) const {
+        if (item == nullptr || item->CtlType != ODT_BUTTON) {
+            return FALSE;
+        }
+        wchar_t text[128]{};
+        GetWindowTextW(item->hwndItem, text, 128);
+        theme::Icon icon = theme::Icon::Check;
+        bool primary = false;
+        COLORREF accent = theme::kBlue;
+        switch (item->CtlID) {
+        case kOnlyTarget:
+            icon = theme::Icon::Monitor;
+            accent = theme::kLime;
+            primary = true;
+            break;
+        case kEnableAll:
+            icon = theme::Icon::Zap;
+            break;
+        case kRestore:
+            icon = theme::Icon::Undo;
+            break;
+        case kRefresh:
+            icon = theme::Icon::RefreshCw;
+            break;
+        case kApply:
+            icon = theme::Icon::Check;
+            primary = true;
+            break;
+        default:
+            break;
+        }
+        theme::draw_button(*item, text, icon, dpi_, accent, primary);
+        return TRUE;
+    }
+
+    LRESULT ColorStatic(HDC dc, HWND control) const {
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, control == status_ ? theme::kSuccess : theme::kInk);
+        return reinterpret_cast<LRESULT>(canvas_brush_);
+    }
+
+    LRESULT OnCustomDraw(const NMHDR* notification) const {
+        if (notification == nullptr || notification->hwndFrom != list_ ||
+            notification->code != NM_CUSTOMDRAW) {
+            return -1;
+        }
+        auto* custom = reinterpret_cast<NMLVCUSTOMDRAW*>(
+            const_cast<NMHDR*>(notification));
+        if (custom->nmcd.dwDrawStage == CDDS_PREPAINT) {
+            return CDRF_NOTIFYITEMDRAW;
+        }
+        if (custom->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
+            return CDRF_NOTIFYSUBITEMDRAW;
+        }
+        if (custom->nmcd.dwDrawStage ==
+            (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) {
+            const bool selected = (custom->nmcd.uItemState & CDIS_SELECTED) != 0;
+            custom->clrText = selected ? theme::kPaper : theme::kInk;
+            custom->clrTextBk = selected ? theme::kBlue : theme::kPaper;
+            return CDRF_NEWFONT;
+        }
+        return CDRF_DODEFAULT;
     }
 
     static bool ContainsKey(
@@ -795,7 +920,7 @@ private:
         SetBusy(false, status);
         if (!result->operation.success && result->kind != JobKind::Refresh) {
             MessageBoxW(window_, result->operation.message.c_str(),
-                        L"显示切换失败", MB_OK | MB_ICONERROR);
+                        L"显示切换失败", MB_OK);
         }
         SchedulePendingRefresh();
     }
@@ -832,6 +957,11 @@ private:
     HWND apply_button_ = nullptr;
     HFONT font_ = nullptr;
     HFONT title_font_ = nullptr;
+    HFONT display_font_ = nullptr;
+    HFONT eyebrow_font_ = nullptr;
+    HBRUSH canvas_brush_ = nullptr;
+    HICON large_icon_ = nullptr;
+    HICON small_icon_ = nullptr;
     UINT dpi_ = 96;
     bool busy_ = false;
     bool suppress_list_events_ = false;

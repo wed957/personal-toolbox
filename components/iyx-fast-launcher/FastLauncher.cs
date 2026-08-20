@@ -17,8 +17,8 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("IYX 驱动界面绿色版")]
 [assembly: AssemblyCompany("IYX Green")]
 [assembly: AssemblyProduct("IYX绿色版")]
-[assembly: AssemblyVersion("3.0.2.0")]
-[assembly: AssemblyFileVersion("3.0.2.0")]
+[assembly: AssemblyVersion("3.1.0.0")]
+[assembly: AssemblyFileVersion("3.1.0.0")]
 
 internal static class FastProgram
 {
@@ -855,9 +855,206 @@ internal static class FastProgram
 
             text = text.Replace("https://user.joyway.net/sdk/sdk.js?20201202", "/sdk/sdk.js");
             const string bridge = @"
+<style id='toolbox-theme'>
+:root {
+  --color-brand-1: #c8f43d !important;
+  --color-brand-1-rgb: 200, 244, 61 !important;
+  --color-brand-2: #2864ff !important;
+  --color-brand-2-rgb: 40, 100, 255 !important;
+  --color-dark: #10110f !important;
+  --color-text-hint: #4c5048 !important;
+  --brand-color: #10110f !important;
+  --brand-color-pure: #2864ff !important;
+  --brand-color-rgb: 40, 100, 255 !important;
+  --brand-color-pure-rgb: 40, 100, 255 !important;
+  --brand-accent-color: #c8f43d !important;
+  --brand-accent-rgb: 200, 244, 61 !important;
+  --bg-main: #f3f4f0 !important;
+  --bg-card: #ffffff !important;
+  --surface-text-primary: #10110f !important;
+  --surface-text-secondary: #4c5048 !important;
+  --shell-text-primary: #10110f !important;
+  --shell-text-secondary: #4c5048 !important;
+  --shell-divider: #d3d6cf !important;
+  --border-color: #d3d6cf !important;
+  --radius-s: 4px !important;
+  --radius-m: 6px !important;
+  --radius-l: 8px !important;
+  --shadow-sm: 0 2px 0 rgba(16,17,15,.1) !important;
+  --shadow-md: 0 5px 0 rgba(16,17,15,.12) !important;
+  --shadow-lg: 0 8px 0 rgba(16,17,15,.14) !important;
+  --shadow-panel: 0 5px 0 rgba(16,17,15,.1) !important;
+  --shadow-soft: 0 2px 0 rgba(16,17,15,.08) !important;
+  --header-shell-bg: #10110f !important;
+  --header-surface: #10110f !important;
+  --sidebar-surface: #ffffff !important;
+  --sidebar-surface-hover: #eef0eb !important;
+  --sidebar-item-active: #c8f43d !important;
+  --settings-shell-bg: #f3f4f0 !important;
+  --settings-sidebar-bg: #ffffff !important;
+  --settings-sidebar-item-hover-bg: #eef0eb !important;
+  --settings-sidebar-item-active-bg: #c8f43d !important;
+  --settings-right-bg: #ffffff !important;
+  --settings-card-bg: #ffffff !important;
+  --settings-card-border: #d3d6cf !important;
+  --btn-base-bg: #ffffff !important;
+  --btn-base-hover-bg: #eef0eb !important;
+  --btn-base-text: #10110f !important;
+  --btn-base-hover-text: #10110f !important;
+  --btn-base-border-color: #d3d6cf !important;
+  --action-btn-primary-bg: #10110f !important;
+  --action-btn-primary-bg-solid: #10110f !important;
+  --action-btn-primary-shadow: 0 4px 0 rgba(40,100,255,.24) !important;
+  --action-btn-primary-shadow-hover: 0 6px 0 rgba(40,100,255,.2) !important;
+  --vk-board-bg: #ffffff !important;
+  --vk-board-border: 1px solid #d3d6cf !important;
+  --vk-board-shadow: 0 5px 0 rgba(16,17,15,.1) !important;
+  --vk-key-bg: #ffffff !important;
+  --vk-key-hover-bg: #c8f43d !important;
+  --vk-key-shadow: 0 2px 0 rgba(16,17,15,.12) !important;
+  --vk-key-hover-shadow: 0 4px 0 rgba(16,17,15,.14) !important;
+  --vk-key-radius: 5px !important;
+  --vk-accent-color: #2864ff !important;
+  --vk-accent-gradient: #2864ff !important;
+}
+html, body {
+  color: #10110f !important;
+  font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif !important;
+  letter-spacing: 0 !important;
+  background-color: #f3f4f0 !important;
+  background-image:
+    linear-gradient(#e1e3de 1px, transparent 1px),
+    linear-gradient(90deg, #e1e3de 1px, transparent 1px) !important;
+  background-size: 42px 42px !important;
+}
+*, *::before, *::after { letter-spacing: 0 !important; }
+::-webkit-scrollbar { width: 8px !important; height: 8px !important; }
+::-webkit-scrollbar-track { background: #eef0eb !important; }
+::-webkit-scrollbar-thumb { background: #10110f !important; border-radius: 4px !important; }
+.header-container {
+  color: #fff !important;
+  background: #10110f !important;
+  border-bottom: 3px solid #2864ff !important;
+  box-shadow: none !important;
+}
+.header-container button, .header-container select,
+.header-container .item, .header-container .language_main {
+  color: #fff !important;
+  border-color: #454840 !important;
+}
+.main_container, .main_container > .container,
+.background-main, .new_background-main {
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+button, input, select, textarea, [role=button] {
+  border-radius: 6px !important;
+  box-shadow: none !important;
+  font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif !important;
+  transition: transform .28s cubic-bezier(.2,.8,.2,1),
+              background-color .28s ease, border-color .28s ease !important;
+}
+button:hover, [role=button]:hover { transform: translateY(-2px); }
+button:active, [role=button]:active { transform: translateY(1px); }
+input, select, textarea {
+  color: #10110f !important;
+  background: #fff !important;
+  border: 1px solid #d3d6cf !important;
+}
+.set_b_box .set_box, .feedback_b_box .feedback_box,
+.dialog-view .dialog-message, .set-action-overlay .content,
+.service_update .service_update_box, .firmware-upgrade,
+.app_update_notice_container {
+  background: #fff !important;
+  border: 1px solid #10110f !important;
+  border-radius: 8px !important;
+  box-shadow: 8px 8px 0 rgba(16,17,15,.14) !important;
+  backdrop-filter: none !important;
+}
+.selected, .active, [aria-selected=true] {
+  border-color: #2864ff !important;
+}
+.toolbox-system-mark {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 2147483646;
+  height: 38px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #10110f;
+  background: #f3f4f0;
+  border: 1px solid #10110f;
+  border-radius: 6px;
+  font: 700 11px/1 Bahnschrift, 'Segoe UI', sans-serif;
+  box-shadow: 3px 3px 0 rgba(16,17,15,.14);
+}
+.toolbox-system-mark::before {
+  content: '';
+  width: 5px;
+  height: 16px;
+  background: #c8f43d;
+}
+.toolbox-keyboard-launcher {
+  position: fixed !important;
+  right: 16px !important;
+  bottom: 16px !important;
+  z-index: 2147483647 !important;
+  width: 52px !important;
+  height: 52px !important;
+  padding: 0 !important;
+  display: grid !important;
+  place-items: center !important;
+  color: #10110f !important;
+  background: #c8f43d !important;
+  border: 1px solid #10110f !important;
+  border-radius: 6px !important;
+  box-shadow: 4px 4px 0 rgba(16,17,15,.2) !important;
+}
+.toolbox-keyboard-launcher:hover {
+  background: #d6ff54 !important;
+  box-shadow: 6px 6px 0 rgba(16,17,15,.16) !important;
+}
+.toolbox-keyboard-launcher svg { width: 24px; height: 24px; }
+html body .device_not_connect,
+html body .device_sleep {
+  color: #10110f !important;
+  background: rgba(16,17,15,.58) !important;
+  backdrop-filter: none !important;
+}
+html body .device_not_connect .message_top_abnormal,
+html body .device_sleep .message_top_abnormal {
+  background: #fff !important;
+  border: 1px solid #10110f !important;
+  border-radius: 8px !important;
+  box-shadow: 10px 10px 0 rgba(16,17,15,.18) !important;
+  backdrop-filter: none !important;
+}
+html body .device_not_connect .exit_sleep,
+html body .device_sleep .exit_sleep {
+  color: #fff !important;
+  background: #10110f !important;
+  border: 1px solid #10110f !important;
+  border-radius: 6px !important;
+  box-shadow: 4px 4px 0 rgba(40,100,255,.28) !important;
+  backdrop-filter: none !important;
+}
+html body .device_not_connect .message_action,
+html body .device_not_connect .message_action_kb,
+html body .device_not_connect .kb_message,
+html body .device_sleep .message_action,
+html body .device_sleep .message_action_kb,
+html body .device_sleep .kb_message {
+  color: #4c5048 !important;
+  text-shadow: none !important;
+}
+</style>
 <script>
 (function () {
-  document.title = '\u827e\u5ca9\u5b9e\u7528\u8f6f\u4ef6';
+  document.title = 'IYX / DRIVER CONTROL';
   window.electronAPI = window.electronAPI || {
     close: function () {
       var closed = false;
@@ -886,14 +1083,54 @@ internal static class FastProgram
   window.electron = { ipcRenderer: { send: function () {} } };
   window.require = window.require || function () { return { ipcRenderer: { send: function () {} } }; };
   window.addEventListener('DOMContentLoaded', function () {
+    var enforceToolboxTheme = function () {
+      document.title = 'IYX / DRIVER CONTROL';
+      document.querySelectorAll('.exit_sleep').forEach(function (element) {
+        element.style.setProperty('color', '#ffffff', 'important');
+        element.style.setProperty('background', '#10110f', 'important');
+        element.style.setProperty('border', '1px solid #10110f', 'important');
+        element.style.setProperty('border-radius', '6px', 'important');
+        element.style.setProperty('box-shadow', '4px 4px 0 rgba(40,100,255,.28)', 'important');
+      });
+      document.querySelectorAll('.message_top_abnormal').forEach(function (element) {
+        element.style.setProperty('background', '#ffffff', 'important');
+        element.style.setProperty('border', '1px solid #10110f', 'important');
+        element.style.setProperty('border-radius', '8px', 'important');
+        element.style.setProperty('box-shadow', '10px 10px 0 rgba(16,17,15,.18)', 'important');
+        element.style.setProperty('backdrop-filter', 'none', 'important');
+      });
+      document.querySelectorAll('button, [role=button], a, div').forEach(function (element) {
+        var label = (element.textContent || '').trim();
+        if (label !== '\u5173\u95ed' && label !== 'Exit Sleep Mode') return;
+        element.style.setProperty('color', '#ffffff', 'important');
+        element.style.setProperty('background', '#10110f', 'important');
+        element.style.setProperty('border', '1px solid #10110f', 'important');
+        element.style.setProperty('border-radius', '6px', 'important');
+        element.style.setProperty('box-shadow', '4px 4px 0 rgba(40,100,255,.28)', 'important');
+      });
+    };
+    document.documentElement.setAttribute('software-theme-preset', 'daylight');
+    var favicon = document.getElementById('favicon');
+    if (favicon) {
+      favicon.href = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='4' fill='%2310110f'/%3E%3Cpath d='m12 14 4-4M3.34 19a10 10 0 1 1 17.32 0' fill='none' stroke='%23c8f43d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E`;
+    }
+    var mark = document.createElement('div');
+    mark.className = 'toolbox-system-mark';
+    mark.textContent = 'IYX / DRIVER 03';
+    document.body.appendChild(mark);
     var button = document.createElement('button');
     button.type = 'button';
     button.title = '\u952e\u76d8\u68c0\u67e5';
     button.setAttribute('aria-label', '\u952e\u76d8\u68c0\u67e5');
-    button.textContent = '\u2328';
-    button.style.cssText = 'position:fixed;right:16px;bottom:16px;width:40px;height:40px;padding:0;border:1px solid #3d4652;border-radius:6px;background:#20252b;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.28);cursor:pointer;font:20px/38px Segoe UI Symbol,sans-serif;text-align:center;z-index:2147483647';
+    button.className = 'toolbox-keyboard-launcher';
+    button.innerHTML = `<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M10 8h.01'/><path d='M12 12h.01'/><path d='M14 8h.01'/><path d='M16 12h.01'/><path d='M18 8h.01'/><path d='M6 8h.01'/><path d='M7 16h10'/><path d='M8 12h.01'/><rect width='20' height='16' x='2' y='4' rx='2'/></svg>`;
     button.addEventListener('click', function () { fetch('/__keyboard-check').catch(function () {}); });
     document.body.appendChild(button);
+    enforceToolboxTheme();
+    new MutationObserver(enforceToolboxTheme).observe(document.body, {
+      childList: true,
+      subtree: true
+    });
   });
 }());
 </script>

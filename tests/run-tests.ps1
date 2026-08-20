@@ -14,6 +14,7 @@ Assert-Path (Join-Path $repo 'components\icc-switch\src\gui.cpp')
 Assert-Path (Join-Path $repo 'components\mux-display-switcher\src\display_manager.cpp')
 Assert-Path (Join-Path $repo 'components\mux-display-switcher\src\display_manager.hpp')
 Assert-Path (Join-Path $repo 'components\iyx-fast-launcher\FastLauncher.cs')
+Assert-Path (Join-Path $repo 'src\toolbox_theme.hpp')
 Assert-Path (Join-Path $repo 'components\iyx-fast-launcher\Payload.zip')
 Assert-Path (Join-Path $repo 'components\keyboard-check\键盘检查.exe')
 
@@ -45,6 +46,11 @@ try {
 }
 if ($embeddedHash -ne $hash) {
     throw "IYX embedded keyboard-check hash mismatch: $embeddedHash"
+}
+
+$iyxSource = Get-Content -LiteralPath (Join-Path $repo 'components\iyx-fast-launcher\FastLauncher.cs') -Raw
+if ($iyxSource -notmatch 'toolbox-theme' -or $iyxSource -notmatch 'toolbox-keyboard-launcher') {
+    throw 'IYX unified theme injection is missing'
 }
 
 Assert-Path (Join-Path $dist 'Toolbox.exe')

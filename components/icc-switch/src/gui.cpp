@@ -2,6 +2,7 @@
 #include <commdlg.h>
 
 #include "resource.h"
+#include "../../../src/toolbox_theme.hpp"
 
 #include <algorithm>
 #include <cwchar>
@@ -16,6 +17,7 @@
 #include <vector>
 
 namespace fs = std::filesystem;
+namespace theme = toolbox_theme;
 
 namespace {
 
@@ -124,10 +126,18 @@ struct AppState {
     HWND profile_combo = nullptr;
     HWND current_label = nullptr;
     HWND status_label = nullptr;
+    HWND import_button = nullptr;
+    HWND reset_button = nullptr;
+    HWND refresh_button = nullptr;
+    HWND apply_button = nullptr;
     HFONT title_font = nullptr;
     HFONT body_font = nullptr;
     HFONT strong_font = nullptr;
+    HFONT display_font = nullptr;
+    HFONT eyebrow_font = nullptr;
     HBRUSH background_brush = nullptr;
+    HICON large_icon = nullptr;
+    HICON small_icon = nullptr;
     std::vector<DisplayInfo> displays;
     std::vector<fs::path> profiles;
 };
@@ -446,81 +456,197 @@ void run_ui_action(Action action) {
     } catch (const UiError& error) {
         set_status(error.message(), true);
         MessageBoxW(g_app ? g_app->window : nullptr, error.message().c_str(),
-                    L"ICC Switch", MB_OK | MB_ICONERROR);
+                    L"ICC Switch", MB_OK);
     } catch (...) {
         const std::wstring message = L"发生未知错误。";
         set_status(message, true);
         MessageBoxW(g_app ? g_app->window : nullptr, message.c_str(),
-                    L"ICC Switch", MB_OK | MB_ICONERROR);
+                    L"ICC Switch", MB_OK);
     }
 }
 
 void create_controls(HWND window) {
     g_app->window = window;
     const UINT dpi = GetDpiForWindow(window);
-    const int body_height = -MulDiv(10, dpi, 72);
-    const int title_height = -MulDiv(20, dpi, 72);
-    g_app->body_font = CreateFontW(body_height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                   DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                   CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    g_app->strong_font = CreateFontW(body_height, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                     CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    g_app->title_font = CreateFontW(title_height, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-                                    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                    CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    g_app->body_font = theme::create_font(dpi, 14, FW_NORMAL);
+    g_app->strong_font = theme::create_font(dpi, 14, FW_SEMIBOLD);
+    g_app->title_font = theme::create_font(dpi, 46, FW_BOLD);
+    g_app->display_font = theme::create_font(dpi, 18, FW_SEMIBOLD, L"Bahnschrift");
+    g_app->eyebrow_font = theme::create_font(dpi, 11, FW_BOLD, L"Bahnschrift");
 
-    HWND title = make_control(window, L"STATIC", L"ICC Switch", SS_LEFT,
-                              28, 22, 584, 38);
-    HWND subtitle = make_control(window, L"STATIC", L"选择显示器与 ICC，然后应用。", SS_LEFT,
-                                 28, 62, 584, 24);
-    HWND display_label = make_control(window, L"STATIC", L"显示器", SS_LEFT,
-                                      28, 104, 584, 22);
     g_app->display_combo = make_control(window, L"COMBOBOX", L"",
-                                        CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
-                                        28, 128, 584, 240, kDisplayComboId);
-    HWND profile_label = make_control(window, L"STATIC", L"ICC 配置", SS_LEFT,
-                                      28, 180, 584, 22);
+                                        CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED |
+                                            CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
+                                        0, 0, 0, 0, kDisplayComboId);
     g_app->profile_combo = make_control(window, L"COMBOBOX", L"",
-                                        CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
-                                        28, 204, 584, 240, kProfileComboId);
+                                        CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED |
+                                            CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
+                                        0, 0, 0, 0, kProfileComboId);
     g_app->current_label = make_control(window, L"STATIC", L"当前配置：读取中...", SS_LEFT,
-                                        28, 256, 584, 24);
-    HWND import_button = make_control(window, L"BUTTON", L"导入 ICC...",
-                                      BS_PUSHBUTTON | WS_TABSTOP,
-                                      28, 306, 118, 38, kImportButtonId);
-    HWND reset_button = make_control(window, L"BUTTON", L"恢复默认",
-                                     BS_PUSHBUTTON | WS_TABSTOP,
-                                     158, 306, 142, 38, kResetButtonId);
-    HWND refresh_button = make_control(window, L"BUTTON", L"刷新",
-                                       BS_PUSHBUTTON | WS_TABSTOP,
-                                       366, 306, 108, 38, kRefreshButtonId);
-    HWND apply_button = make_control(window, L"BUTTON", L"应用",
-                                     BS_DEFPUSHBUTTON | WS_TABSTOP,
-                                     486, 306, 126, 38, kApplyButtonId);
+                                        0, 0, 0, 0);
+    g_app->import_button = make_control(window, L"BUTTON", L"导入 ICC",
+                                        BS_OWNERDRAW | WS_TABSTOP,
+                                        0, 0, 0, 0, kImportButtonId);
+    g_app->reset_button = make_control(window, L"BUTTON", L"恢复默认",
+                                       BS_OWNERDRAW | WS_TABSTOP,
+                                       0, 0, 0, 0, kResetButtonId);
+    g_app->refresh_button = make_control(window, L"BUTTON", L"刷新列表",
+                                         BS_OWNERDRAW | WS_TABSTOP,
+                                         0, 0, 0, 0, kRefreshButtonId);
+    g_app->apply_button = make_control(window, L"BUTTON", L"应用配置",
+                                       BS_OWNERDRAW | WS_TABSTOP,
+                                       0, 0, 0, 0, kApplyButtonId);
     g_app->status_label = make_control(window, L"STATIC", L"", SS_LEFT,
-                                       28, 365, 584, 24, kStatusLabelId);
+                                       0, 0, 0, 0, kStatusLabelId);
 
-    set_font(title, g_app->title_font);
-    set_font(subtitle, g_app->body_font);
-    set_font(display_label, g_app->strong_font);
-    set_font(profile_label, g_app->strong_font);
     set_font(g_app->display_combo, g_app->body_font);
     set_font(g_app->profile_combo, g_app->body_font);
-    set_font(g_app->current_label, g_app->body_font);
-    set_font(import_button, g_app->body_font);
-    set_font(reset_button, g_app->body_font);
-    set_font(refresh_button, g_app->body_font);
-    set_font(apply_button, g_app->strong_font);
+    set_font(g_app->current_label, g_app->strong_font);
+    set_font(g_app->import_button, g_app->body_font);
+    set_font(g_app->reset_button, g_app->body_font);
+    set_font(g_app->refresh_button, g_app->body_font);
+    set_font(g_app->apply_button, g_app->strong_font);
     set_font(g_app->status_label, g_app->body_font);
+    theme::style_title_bar(window);
+}
+
+void layout_controls(HWND window) {
+    if (!g_app || !g_app->display_combo) {
+        return;
+    }
+    RECT client{};
+    GetClientRect(window, &client);
+    const UINT dpi = GetDpiForWindow(window);
+    const int width = client.right;
+    const int height = client.bottom;
+    const int margin = theme::scale(56, dpi);
+    const int gap = theme::scale(18, dpi);
+    const int content_width = std::max(theme::scale(600, dpi), width - margin * 2);
+    const int column_width = (content_width - gap) / 2;
+    const int field_y = theme::scale(276, dpi);
+    const int field_height = theme::scale(260, dpi);
+
+    MoveWindow(g_app->display_combo, margin, field_y, column_width,
+               field_height, TRUE);
+    MoveWindow(g_app->profile_combo, margin + column_width + gap, field_y,
+               column_width, field_height, TRUE);
+
+    const int current_y = theme::scale(352, dpi);
+    MoveWindow(g_app->current_label, margin + theme::scale(18, dpi),
+               current_y + theme::scale(2, dpi),
+               content_width - theme::scale(36, dpi), theme::scale(52, dpi), TRUE);
+
+    const int button_y = std::min(height - theme::scale(126, dpi),
+                                  theme::scale(432, dpi));
+    const int button_gap = theme::scale(12, dpi);
+    const int button_width = (content_width - button_gap * 3) / 4;
+    const int button_height = theme::scale(48, dpi);
+    const HWND buttons[] = {g_app->import_button, g_app->reset_button,
+                            g_app->refresh_button, g_app->apply_button};
+    for (int index = 0; index < 4; ++index) {
+        MoveWindow(buttons[index], margin + index * (button_width + button_gap),
+                   button_y, button_width, button_height, TRUE);
+    }
+    MoveWindow(g_app->status_label, margin, height - theme::scale(58, dpi),
+               content_width, theme::scale(30, dpi), TRUE);
+}
+
+void paint_window(HWND window, HDC target) {
+    RECT client{};
+    GetClientRect(window, &client);
+    const int width = std::max(1L, client.right);
+    const int height = std::max(1L, client.bottom);
+    const UINT dpi = GetDpiForWindow(window);
+    HDC memory = CreateCompatibleDC(target);
+    HBITMAP bitmap = CreateCompatibleBitmap(target, width, height);
+    const HGDIOBJ old_bitmap = SelectObject(memory, bitmap);
+
+    theme::draw_grid(memory, client, dpi, theme::kCoral);
+    const int margin = theme::scale(56, dpi);
+    RECT eyebrow{margin, theme::scale(25, dpi), width - margin,
+                 theme::scale(55, dpi)};
+    theme::draw_text(memory, L"COLOR / PROFILE CONTROL", eyebrow,
+                     g_app->eyebrow_font, theme::kInk);
+    RECT title{margin, theme::scale(105, dpi), width - margin,
+               theme::scale(175, dpi)};
+    theme::draw_text(memory, L"ICC SWITCH", title, g_app->title_font,
+                     theme::kInk, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    RECT subtitle{margin, theme::scale(174, dpi), width - margin,
+                  theme::scale(207, dpi)};
+    theme::draw_text(memory, L"显示器色彩配置 / CURRENT USER", subtitle,
+                     g_app->display_font, theme::kMuted);
+    RECT index_rect{width - theme::scale(210, dpi), theme::scale(104, dpi),
+                    width - margin, theme::scale(180, dpi)};
+    theme::draw_text(memory, L"01", index_rect, g_app->title_font,
+                     RGB(215, 218, 211), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
+    const int gap = theme::scale(18, dpi);
+    const int content_width = width - margin * 2;
+    const int column_width = (content_width - gap) / 2;
+    RECT display_label{margin, theme::scale(238, dpi), margin + column_width,
+                       theme::scale(268, dpi)};
+    RECT profile_label{margin + column_width + gap, theme::scale(238, dpi),
+                       width - margin, theme::scale(268, dpi)};
+    theme::draw_text(memory, L"DISPLAY / 显示器", display_label,
+                     g_app->eyebrow_font, theme::kMuted);
+    theme::draw_text(memory, L"PROFILE / ICC 配置", profile_label,
+                     g_app->eyebrow_font, theme::kMuted);
+
+    RECT current_card{margin, theme::scale(346, dpi), width - margin,
+                      theme::scale(408, dpi)};
+    theme::fill_round_rect(memory, current_card, theme::scale(7, dpi),
+                           theme::kLime, theme::kInk, 1);
+
+    HPEN separator = CreatePen(PS_SOLID, 1, theme::kLine);
+    const HGDIOBJ previous_pen = SelectObject(memory, separator);
+    MoveToEx(memory, 0, height - theme::scale(78, dpi), nullptr);
+    LineTo(memory, width, height - theme::scale(78, dpi));
+    SelectObject(memory, previous_pen);
+    DeleteObject(separator);
+
+    BitBlt(target, 0, 0, width, height, memory, 0, 0, SRCCOPY);
+    SelectObject(memory, old_bitmap);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+}
+
+theme::Icon button_icon(int id) {
+    switch (id) {
+    case kImportButtonId: return theme::Icon::FolderPlus;
+    case kResetButtonId: return theme::Icon::RotateCcw;
+    case kRefreshButtonId: return theme::Icon::RefreshCw;
+    default: return theme::Icon::Check;
+    }
 }
 
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
     switch (message) {
     case WM_CREATE:
         create_controls(window);
+        layout_controls(window);
         run_ui_action(refresh_data);
         return 0;
+
+    case WM_SIZE:
+        layout_controls(window);
+        InvalidateRect(window, nullptr, FALSE);
+        return 0;
+
+    case WM_GETMINMAXINFO: {
+        auto* limits = reinterpret_cast<MINMAXINFO*>(l_param);
+        const UINT dpi = GetDpiForWindow(window);
+        limits->ptMinTrackSize.x = theme::scale(780, dpi);
+        limits->ptMinTrackSize.y = theme::scale(590, dpi);
+        return 0;
+    }
+
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(window, &paint);
+        paint_window(window, dc);
+        EndPaint(window, &paint);
+        return 0;
+    }
 
     case WM_COMMAND:
         switch (LOWORD(w_param)) {
@@ -546,39 +672,80 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
         }
         return 0;
 
+    case WM_MEASUREITEM: {
+        auto* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(l_param);
+        if (measure->CtlType == ODT_COMBOBOX) {
+            measure->itemHeight = theme::scale(42, GetDpiForWindow(window));
+            return TRUE;
+        }
+        break;
+    }
+
+    case WM_DRAWITEM: {
+        const auto* item = reinterpret_cast<DRAWITEMSTRUCT*>(l_param);
+        if (item->CtlType == ODT_COMBOBOX) {
+            theme::draw_combo(*item, GetDpiForWindow(window));
+            return TRUE;
+        }
+        if (item->CtlType == ODT_BUTTON) {
+            wchar_t text[128]{};
+            GetWindowTextW(item->hwndItem, text, 128);
+            theme::draw_button(*item, text, button_icon(item->CtlID),
+                               GetDpiForWindow(window), theme::kCoral,
+                               item->CtlID == kApplyButtonId);
+            return TRUE;
+        }
+        break;
+    }
+
     case WM_CTLCOLORSTATIC: {
         const HDC dc = reinterpret_cast<HDC>(w_param);
         const HWND control = reinterpret_cast<HWND>(l_param);
-        SetBkColor(dc, RGB(250, 250, 250));
+        SetBkMode(dc, TRANSPARENT);
+        static HBRUSH lime_brush = CreateSolidBrush(theme::kLime);
+        if (g_app && control == g_app->current_label) {
+            SetBkColor(dc, theme::kLime);
+            SetTextColor(dc, theme::kInk);
+            return reinterpret_cast<LRESULT>(lime_brush);
+        }
         if (g_app && control == g_app->status_label &&
             GetWindowLongPtrW(control, GWLP_USERDATA) != 0) {
-            SetTextColor(dc, RGB(178, 32, 42));
+            SetTextColor(dc, theme::kDanger);
         } else if (g_app && control == g_app->status_label) {
-            SetTextColor(dc, RGB(32, 112, 66));
+            SetTextColor(dc, theme::kSuccess);
         } else {
-            SetTextColor(dc, RGB(35, 38, 42));
+            SetTextColor(dc, theme::kInk);
         }
         return reinterpret_cast<LRESULT>(g_app->background_brush);
     }
 
-    case WM_ERASEBKGND: {
-        RECT rect{};
-        GetClientRect(window, &rect);
-        FillRect(reinterpret_cast<HDC>(w_param), &rect, g_app->background_brush);
-        return 1;
+    case WM_CTLCOLORLISTBOX: {
+        const HDC dc = reinterpret_cast<HDC>(w_param);
+        SetBkColor(dc, theme::kPaper);
+        SetTextColor(dc, theme::kInk);
+        static HBRUSH paper_brush = CreateSolidBrush(theme::kPaper);
+        return reinterpret_cast<LRESULT>(paper_brush);
     }
+
+    case WM_ERASEBKGND:
+        return 1;
 
     case WM_DESTROY:
         DeleteObject(g_app->title_font);
         DeleteObject(g_app->body_font);
         DeleteObject(g_app->strong_font);
+        DeleteObject(g_app->display_font);
+        DeleteObject(g_app->eyebrow_font);
         DeleteObject(g_app->background_brush);
+        DestroyIcon(g_app->large_icon);
+        DestroyIcon(g_app->small_icon);
         PostQuitMessage(0);
         return 0;
 
     default:
         return DefWindowProcW(window, message, w_param, l_param);
     }
+    return DefWindowProcW(window, message, w_param, l_param);
 }
 
 } // namespace
@@ -587,27 +754,32 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     SetProcessDPIAware();
     try {
         g_app = std::make_unique<AppState>();
-        g_app->background_brush = CreateSolidBrush(RGB(250, 250, 250));
+        g_app->background_brush = CreateSolidBrush(theme::kCanvas);
+        g_app->large_icon = theme::create_app_icon(32, theme::Icon::Palette,
+                                                    theme::kCoral);
+        g_app->small_icon = theme::create_app_icon(16, theme::Icon::Palette,
+                                                    theme::kCoral);
 
         const wchar_t* class_name = L"IccSwitchNativeWindow";
         WNDCLASSEXW window_class{};
         window_class.cbSize = sizeof(window_class);
+        window_class.style = CS_HREDRAW | CS_VREDRAW;
         window_class.lpfnWndProc = window_proc;
         window_class.hInstance = instance;
-        window_class.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_ICC_SWITCH));
-        window_class.hIconSm = LoadIconW(instance, MAKEINTRESOURCEW(IDI_ICC_SWITCH));
+        window_class.hIcon = g_app->large_icon;
+        window_class.hIconSm = g_app->small_icon;
         window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        window_class.hbrBackground = g_app->background_brush;
+        window_class.hbrBackground = nullptr;
         window_class.lpszClassName = class_name;
         if (!RegisterClassExW(&window_class)) {
             throw UiError(L"无法注册主窗口。\n" + win32_message(GetLastError()));
         }
 
         const UINT dpi = GetDpiForSystem();
-        RECT rect{0, 0, MulDiv(640, dpi, 96), MulDiv(418, dpi, 96)};
-        constexpr DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+        RECT rect{0, 0, MulDiv(920, dpi, 96), MulDiv(640, dpi, 96)};
+        constexpr DWORD style = WS_OVERLAPPEDWINDOW;
         AdjustWindowRect(&rect, style, FALSE);
-        HWND window = CreateWindowExW(0, class_name, L"ICC Switch", style,
+        HWND window = CreateWindowExW(0, class_name, L"ICC SWITCH / COLOR CONTROL", style,
                                       CW_USEDEFAULT, CW_USEDEFAULT,
                                       rect.right - rect.left, rect.bottom - rect.top,
                                       nullptr, nullptr, instance, nullptr);
@@ -629,11 +801,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         return static_cast<int>(message.wParam);
     } catch (const UiError& error) {
         MessageBoxW(nullptr, error.message().c_str(), L"ICC Switch",
-                    MB_OK | MB_ICONERROR);
+                    MB_OK);
         return 1;
     } catch (...) {
         MessageBoxW(nullptr, L"ICC Switch 启动失败。", L"ICC Switch",
-                    MB_OK | MB_ICONERROR);
+                    MB_OK);
         return 1;
     }
 }

@@ -138,7 +138,7 @@ internal static class FastProgram
 
             string bootRoot = Path.Combine(verificationRoot, "Boot");
             string stateRoot = Path.Combine(verificationRoot, "State");
-            PrepareBootFiles(bootRoot, stateRoot);
+            PrepareBootFiles(bootRoot, stateRoot, false);
 
             string magnet = Path.Combine(
                 stateRoot,
@@ -146,7 +146,7 @@ internal static class FastProgram
             using (FileStream locked = new FileStream(
                 magnet, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
-                PrepareBootFiles(bootRoot, stateRoot);
+                PrepareBootFiles(bootRoot, stateRoot, false);
             }
         }
         catch
@@ -164,12 +164,15 @@ internal static class FastProgram
         return Path.Combine(root, "EdgeProfile");
     }
 
-    private static void PrepareBootFiles(string root, string stateRoot)
+    private static void PrepareBootFiles(
+        string root, string stateRoot, bool includeBrowserBundle = true)
     {
         string localRoot = Path.Combine(stateRoot, "Data", "Local", "IYXAST", "apps");
         string servicePrefix = "Data/Local/IYXAST/apps/driver_service/";
         string scriptIni = "Data/Local/IYXAST/apps/driver_script/app.ini";
         string scriptIndex = "Data/Local/IYXAST/apps/driver_script/index.html";
+        string browserPrefix = "browser/";
+        string embedRoamingPrefix = "Data/Roaming/iyx_ast_embed/";
 
         ExtractEntries(root, delegate (string name)
         {
@@ -181,10 +184,39 @@ internal static class FastProgram
         {
             return string.Equals(name, scriptIni, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(name, scriptIndex, StringComparison.OrdinalIgnoreCase)
-                || name.StartsWith(servicePrefix, StringComparison.OrdinalIgnoreCase);
+                || name.StartsWith(servicePrefix, StringComparison.OrdinalIgnoreCase)
+                || (includeBrowserBundle
+                    && (name.StartsWith(browserPrefix, StringComparison.OrdinalIgnoreCase)
+                        || name.StartsWith(embedRoamingPrefix,
+                                           StringComparison.OrdinalIgnoreCase)));
         }, IsPersistentDriverConfig);
 
         Directory.CreateDirectory(localRoot);
+        if (includeBrowserBundle)
+            LinkBrowserBundle(root, Path.Combine(stateRoot, "browser"));
+    }
+
+    // driver.service preflights <launcher root>\browser\iyx_ast_embed.exe for the
+    // magnet check window. The bundle is large, so it is extracted once into the
+    // persistent state root and junctioned into each per-run root.
+    private static void LinkBrowserBundle(string root, string persistentBrowser)
+    {
+        string link = Path.Combine(root, "browser");
+        if (Directory.Exists(link) || !Directory.Exists(persistentBrowser))
+            return;
+
+        ProcessStartInfo info = new ProcessStartInfo();
+        info.FileName = "cmd.exe";
+        info.Arguments = "/c mklink /J \"" + link + "\" \"" + persistentBrowser + "\"";
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+        using (Process process = Process.Start(info))
+        {
+            if (process != null)
+                process.WaitForExit(5000);
+        }
+        if (!Directory.Exists(link))
+            throw new InvalidOperationException("无法链接磁轴检测组件目录（mklink /J 失败）。");
     }
 
     private static bool IsPersistentDriverConfig(string name)
@@ -194,7 +226,9 @@ internal static class FastProgram
                 name,
                 serviceRoot + "user.list.cfg.json",
                 StringComparison.OrdinalIgnoreCase)
-            || name.StartsWith(serviceRoot + "user_cfgs/", StringComparison.OrdinalIgnoreCase);
+            || name.StartsWith(serviceRoot + "user_cfgs/", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("Data/Roaming/iyx_ast_embed/",
+                               StringComparison.OrdinalIgnoreCase);
     }
 
     private static void ExtractEntries(

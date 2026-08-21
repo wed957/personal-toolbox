@@ -919,8 +919,8 @@ internal static class FastProgram
   --shadow-lg: 0 8px 0 rgba(16,17,15,.14) !important;
   --shadow-panel: 0 5px 0 rgba(16,17,15,.1) !important;
   --shadow-soft: 0 2px 0 rgba(16,17,15,.08) !important;
-  --header-shell-bg: #10110f !important;
-  --header-surface: #10110f !important;
+  --header-shell-bg: #ffffff !important;
+  --header-surface: #ffffff !important;
   --sidebar-surface: #ffffff !important;
   --sidebar-surface-hover: #eef0eb !important;
   --sidebar-item-active: #c8f43d !important;
@@ -966,15 +966,15 @@ html, body {
 ::-webkit-scrollbar-track { background: #eef0eb !important; }
 ::-webkit-scrollbar-thumb { background: #10110f !important; border-radius: 4px !important; }
 .header-container {
-  color: #fff !important;
-  background: #10110f !important;
+  color: #10110f !important;
+  background: #ffffff !important;
   border-bottom: 3px solid #2864ff !important;
   box-shadow: none !important;
 }
 .header-container button, .header-container select,
 .header-container .item, .header-container .language_main {
-  color: #fff !important;
-  border-color: #454840 !important;
+  color: #10110f !important;
+  border-color: #d3d6cf !important;
 }
 .main_container, .main_container > .container,
 .background-main, .new_background-main {

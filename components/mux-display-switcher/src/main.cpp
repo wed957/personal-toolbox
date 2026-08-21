@@ -3,6 +3,7 @@
 #include "../../../src/toolbox_theme.hpp"
 
 #include <commctrl.h>
+#include <uxtheme.h>
 
 #include <algorithm>
 #include <atomic>
@@ -51,6 +52,12 @@ enum class JobKind {
     Restore,
 };
 
+enum class StatusState {
+    Info,
+    Ok,
+    Error,
+};
+
 enum class ApplyIntent {
     Selected,
     OnlyTarget,
@@ -79,6 +86,7 @@ public:
     explicit App(HINSTANCE instance) : instance_(instance) {}
 
     int Run(int show_command) {
+        theme::init_gdi_plus();
         INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_LISTVIEW_CLASSES};
         InitCommonControlsEx(&controls);
         large_icon_ = theme::create_app_icon(32, theme::Icon::Panels,
@@ -236,6 +244,7 @@ private:
                 DeleteObject(title_font_);
                 DeleteObject(display_font_);
                 DeleteObject(eyebrow_font_);
+                DeleteObject(header_font_);
                 DeleteObject(canvas_brush_);
                 DestroyIcon(large_icon_);
                 DestroyIcon(small_icon_);
@@ -291,6 +300,17 @@ private:
         ListView_SetExtendedListViewStyle(
             list_, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
                        LVS_EX_LABELTIP);
+        // Flatten the header so its custom draw fully controls the chrome.
+        HWND header = ListView_GetHeader(list_);
+        if (header != nullptr) {
+            SetWindowTheme(header, L"", nullptr);
+        }
+        // Empty small image list: bumps row height for a calmer table rhythm
+        // (the checkbox glyph scales with it, which stays acceptable).
+        HIMAGELIST rows = ImageList_Create(1, Scale(18, dpi_), ILC_COLOR32, 1, 0);
+        if (rows != nullptr) {
+            ListView_SetImageList(list_, rows, LVSIL_SMALL);
+        }
         ListView_SetBkColor(list_, theme::kPaper);
         ListView_SetTextBkColor(list_, theme::kPaper);
         ListView_SetTextColor(list_, theme::kInk);
@@ -334,6 +354,7 @@ private:
                                            L"Bahnschrift");
         eyebrow_font_ = theme::create_font(dpi_, 11, FW_BOLD,
                                            L"Bahnschrift");
+        header_font_ = theme::create_font(dpi_, 12, FW_SEMIBOLD);
     }
 
     void OnDpiChanged(WPARAM wparam, LPARAM lparam) {
@@ -349,6 +370,7 @@ private:
         DeleteObject(title_font_);
         DeleteObject(display_font_);
         DeleteObject(eyebrow_font_);
+        DeleteObject(header_font_);
         CreateFonts();
         for (HWND control : AllControls()) {
             SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font_),
@@ -368,40 +390,52 @@ private:
         GetClientRect(window_, &client);
         const int width = client.right;
         const int height = client.bottom;
-        const int margin = Scale(56, dpi_);
+        const UINT dpi = dpi_;
+        const int margin = Scale(56, dpi);
         const int content_width = std::max(0, width - margin * 2);
 
+        // Hidden: title/subtitle are painted directly in Paint().
         MoveWindow(title_, 0, 0, 0, 0, FALSE);
         MoveWindow(subtitle_, 0, 0, 0, 0, FALSE);
-        MoveWindow(only_button_, margin, Scale(226, dpi_), content_width,
-                   Scale(54, dpi_), TRUE);
 
-        const int bottom_buttons_y = height - Scale(74, dpi_);
-        const int status_y = bottom_buttons_y - Scale(42, dpi_);
-        const int list_y = Scale(304, dpi_);
-        MoveWindow(list_, margin, list_y, content_width,
-                   std::max(Scale(150, dpi_), status_y - list_y - Scale(12, dpi_)),
-                   TRUE);
-        MoveWindow(status_, margin, status_y, content_width, Scale(24, dpi_),
-                   TRUE);
+        // Action row A: hero switch + restore, right under the subtitle.
+        const int row_a_y = Scale(228, dpi);
+        const int row_height = Scale(50, dpi);
+        const int restore_width = Scale(178, dpi);
+        MoveWindow(only_button_, margin, row_a_y,
+                   std::max(Scale(280, dpi),
+                            content_width - restore_width - Scale(14, dpi)),
+                   row_height, TRUE);
+        MoveWindow(restore_button_, width - margin - restore_width, row_a_y,
+                   restore_width, row_height, TRUE);
 
-        const int gap = Scale(12, dpi_);
-        const int small = Scale(142, dpi_);
-        const int apply_width = Scale(168, dpi_);
-        MoveWindow(enable_all_button_, margin, bottom_buttons_y, small,
-                   Scale(48, dpi_), TRUE);
-        MoveWindow(restore_button_, margin + small + gap, bottom_buttons_y,
-                   Scale(176, dpi_), Scale(48, dpi_), TRUE);
-        MoveWindow(refresh_button_,
-                   width - margin - apply_width - gap - Scale(132, dpi_),
-                   bottom_buttons_y, Scale(132, dpi_), Scale(48, dpi_), TRUE);
-        MoveWindow(apply_button_, width - margin - apply_width, bottom_buttons_y,
-                   apply_width, Scale(48, dpi_), TRUE);
+        // Secondary row above the footer separator.
+        const int footer_rule = height - Scale(78, dpi);
+        const int row_b_y = footer_rule - Scale(16, dpi) - row_height;
+        MoveWindow(enable_all_button_, margin, row_b_y, Scale(150, dpi),
+                   row_height, TRUE);
+        MoveWindow(refresh_button_, margin + Scale(150, dpi) + Scale(12, dpi),
+                   row_b_y, Scale(140, dpi), row_height, TRUE);
+        MoveWindow(apply_button_, width - margin - Scale(170, dpi), row_b_y,
+                   Scale(170, dpi), row_height, TRUE);
 
-        ListView_SetColumnWidth(list_, 0, std::max(Scale(220, dpi_),
-                                                   content_width - Scale(340, dpi_)));
-        ListView_SetColumnWidth(list_, 1, Scale(115, dpi_));
-        ListView_SetColumnWidth(list_, 2, Scale(210, dpi_));
+        // Display list card.
+        const int card_top = Scale(332, dpi);
+        const int card_bottom = row_b_y - Scale(20, dpi);
+        list_card_ = {margin, card_top, width - margin,
+                      std::max(card_bottom, card_top + Scale(96, dpi))};
+        const int pad = Scale(10, dpi);
+        MoveWindow(list_, list_card_.left + pad, list_card_.top + pad,
+                   (list_card_.right - list_card_.left) - pad * 2,
+                   (list_card_.bottom - list_card_.top) - pad * 2, TRUE);
+        MoveWindow(status_, margin, height - Scale(58, dpi), content_width,
+                   Scale(30, dpi), TRUE);
+
+        const int list_width = (list_card_.right - list_card_.left) - pad * 2;
+        ListView_SetColumnWidth(list_, 0, std::max(Scale(200, dpi),
+                                                   list_width - Scale(320, dpi)));
+        ListView_SetColumnWidth(list_, 1, Scale(112, dpi));
+        ListView_SetColumnWidth(list_, 2, Scale(200, dpi));
     }
 
     void Paint() {
@@ -432,10 +466,20 @@ private:
                          RGB(215, 218, 211),
                          DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
+        // Section label above the list card.
+        RECT section{margin, Scale(300, dpi_), width - margin,
+                     Scale(326, dpi_)};
+        theme::draw_text(memory, L"DISPLAY / 显示器列表", section,
+                         eyebrow_font_, theme::kMuted);
+
+        // White card framing the display list.
+        theme::fill_round_rect(
+            memory, list_card_, Scale(10, dpi_), theme::kPaper, theme::kLine, 1);
+
         HPEN separator = CreatePen(PS_SOLID, 1, theme::kLine);
         const HGDIOBJ old_pen = SelectObject(memory, separator);
-        MoveToEx(memory, 0, height - Scale(96, dpi_), nullptr);
-        LineTo(memory, width, height - Scale(96, dpi_));
+        MoveToEx(memory, 0, height - Scale(78, dpi_), nullptr);
+        LineTo(memory, width, height - Scale(78, dpi_));
         SelectObject(memory, old_pen);
         DeleteObject(separator);
 
@@ -483,13 +527,59 @@ private:
 
     LRESULT ColorStatic(HDC dc, HWND control) const {
         SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, control == status_ ? theme::kSuccess : theme::kInk);
+        if (control == status_) {
+            switch (status_state_) {
+            case StatusState::Ok: SetTextColor(dc, theme::kSuccess); break;
+            case StatusState::Error: SetTextColor(dc, theme::kDanger); break;
+            case StatusState::Info: SetTextColor(dc, theme::kMuted); break;
+            }
+        } else {
+            SetTextColor(dc, theme::kInk);
+        }
         return reinterpret_cast<LRESULT>(canvas_brush_);
     }
 
     LRESULT OnCustomDraw(const NMHDR* notification) const {
-        if (notification == nullptr || notification->hwndFrom != list_ ||
-            notification->code != NM_CUSTOMDRAW) {
+        if (notification == nullptr || notification->code != NM_CUSTOMDRAW) {
+            return -1;
+        }
+        // Flat paper header row for the display list.
+        if (list_ != nullptr && notification->hwndFrom == ListView_GetHeader(list_)) {
+            auto* custom = reinterpret_cast<NMCUSTOMDRAW*>(
+                const_cast<NMHDR*>(notification));
+            if (custom->dwDrawStage == CDDS_PREPAINT) {
+                return CDRF_NOTIFYITEMDRAW;
+            }
+            if (custom->dwDrawStage == CDDS_ITEMPREPAINT) {
+                // Paint the full header chrome on the first item so the gaps
+                // between items don't flash the system background color.
+                RECT full{};
+                GetClientRect(notification->hwndFrom, &full);
+                RECT frame = custom->rc;
+                FillRect(custom->hdc, &full,
+                         reinterpret_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
+                wchar_t caption[128]{};
+                HDITEMW item{};
+                item.mask = HDI_TEXT;
+                item.pszText = caption;
+                item.cchTextMax = 128;
+                Header_GetItem(notification->hwndFrom, custom->dwItemSpec,
+                               &item);
+                RECT text_rect = frame;
+                text_rect.left += Scale(14, dpi_);
+                theme::draw_text(custom->hdc, caption, text_rect,
+                                 header_font_, theme::kMuted);
+                HPEN rule = CreatePen(PS_SOLID, 1, theme::kLine);
+                const HGDIOBJ old_pen = SelectObject(custom->hdc, rule);
+                MoveToEx(custom->hdc, frame.left, frame.bottom - 1, nullptr);
+                LineTo(custom->hdc, frame.right, frame.bottom - 1);
+                SelectObject(custom->hdc, old_pen);
+                DeleteObject(rule);
+                return CDRF_SKIPDEFAULT;
+            }
+            return CDRF_DODEFAULT;
+        }
+        if (notification->hwndFrom != list_) {
             return -1;
         }
         auto* custom = reinterpret_cast<NMLVCUSTOMDRAW*>(
@@ -502,7 +592,12 @@ private:
         }
         if (custom->nmcd.dwDrawStage ==
             (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) {
-            const bool selected = (custom->nmcd.uItemState & CDIS_SELECTED) != 0;
+            // Query the live selection state; uItemState can lag while the
+            // checkbox state image is being updated during population.
+            const bool selected =
+                (ListView_GetItemState(
+                     list_, static_cast<int>(custom->nmcd.dwItemSpec),
+                     LVIS_SELECTED) != 0);
             custom->clrText = selected ? theme::kPaper : theme::kInk;
             custom->clrTextBk = selected ? theme::kBlue : theme::kPaper;
             return CDRF_NEWFONT;
@@ -595,11 +690,13 @@ private:
         EnableWindow(apply_button_, !busy_ && selected != 0);
     }
 
-    void SetStatus(const std::wstring& text) {
+    void SetStatus(const std::wstring& text, StatusState state = StatusState::Info) {
+        status_state_ = state;
         SetWindowTextW(status_, text.c_str());
     }
 
-    void SetBusy(bool busy, const std::wstring& status = {}) {
+    void SetBusy(bool busy, const std::wstring& status = {},
+                 StatusState state = StatusState::Info) {
         busy_ = busy;
         EnableWindow(list_, !busy);
         EnableWindow(only_button_, !busy);
@@ -608,7 +705,7 @@ private:
         EnableWindow(refresh_button_, !busy);
         EnableWindow(apply_button_, !busy && !SelectedKeys().empty());
         if (!status.empty()) {
-            SetStatus(status);
+            SetStatus(status, state);
         }
     }
 
@@ -917,7 +1014,8 @@ private:
             !result->operation.message.empty()
                 ? result->operation.message
                 : result->refresh_error;
-        SetBusy(false, status);
+        SetBusy(false, status, result->operation.success ? StatusState::Ok
+                                                        : StatusState::Error);
         if (!result->operation.success && result->kind != JobKind::Refresh) {
             MessageBoxW(window_, result->operation.message.c_str(),
                         L"显示切换失败", MB_OK);
@@ -934,6 +1032,7 @@ private:
     void HandleUiFailure() noexcept {
         busy_ = false;
         if (status_ != nullptr) {
+            status_state_ = StatusState::Error;
             SetWindowTextW(status_, L"界面操作失败，请刷新后重试。");
         }
         for (HWND control : {list_, only_button_, enable_all_button_,
@@ -959,10 +1058,13 @@ private:
     HFONT title_font_ = nullptr;
     HFONT display_font_ = nullptr;
     HFONT eyebrow_font_ = nullptr;
+    HFONT header_font_ = nullptr;
     HBRUSH canvas_brush_ = nullptr;
     HICON large_icon_ = nullptr;
     HICON small_icon_ = nullptr;
     UINT dpi_ = 96;
+    RECT list_card_ = {};
+    StatusState status_state_ = StatusState::Info;
     bool busy_ = false;
     bool suppress_list_events_ = false;
     bool has_previous_ = false;

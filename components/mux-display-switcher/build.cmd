@@ -30,7 +30,7 @@ pushd "%ROOT%"
 popd
 
 echo [5/6] Linking standalone executables...
-"%CXX%" -Os -static -s -mwindows -Wl,--gc-sections "%ROOT%build\main.o" "%ROOT%build\display_manager.o" "%ROOT%build\app.o" -o "%ROOT%dist\MUX.exe" -lcomctl32 -luser32 -lgdi32 || exit /b 1
+"%CXX%" -Os -static -s -mwindows -Wl,--gc-sections "%ROOT%build\main.o" "%ROOT%build\display_manager.o" "%ROOT%build\app.o" -o "%ROOT%dist\MUX.exe" -lcomctl32 -luser32 -lgdi32 -lgdiplus -luxtheme || exit /b 1
 "%CXX%" -Os -static -s -municode -Wl,--gc-sections "%ROOT%build\cli.o" "%ROOT%build\display_manager.o" -o "%ROOT%dist\MUX-cli.exe" -luser32 || exit /b 1
 
 echo [6/6] Verifying outputs...

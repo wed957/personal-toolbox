@@ -752,6 +752,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     SetProcessDPIAware();
+    theme::init_gdi_plus();
     try {
         g_app = std::make_unique<AppState>();
         g_app->background_brush = CreateSolidBrush(theme::kCanvas);

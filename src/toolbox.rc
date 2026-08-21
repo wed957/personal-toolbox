@@ -4,8 +4,8 @@
 1 ICON "toolbox.ico"
 
 1 VERSIONINFO
-FILEVERSION     1,1,0,0
-PRODUCTVERSION  1,1,0,0
+FILEVERSION     1,2,0,0
+PRODUCTVERSION  1,2,0,0
 FILEOS          0x40004L   // VOS_NT_WINDOWS32
 FILETYPE        0x1L       // VFT_APP
 BEGIN
@@ -15,11 +15,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName",      "wed957"
       VALUE "FileDescription",  "自用工具箱统一入口"
-      VALUE "FileVersion",      "1.1.0"
+      VALUE "FileVersion",      "1.2.0"
       VALUE "InternalName",     "Toolbox"
       VALUE "OriginalFilename", "Toolbox.exe"
       VALUE "ProductName",      "Personal Toolbox"
-      VALUE "ProductVersion",   "1.1.0"
+      VALUE "ProductVersion",   "1.2.0"
     END
   END
   BLOCK "VarFileInfo"

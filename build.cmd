@@ -18,33 +18,39 @@ if not exist "%CXX%" (
 if not exist "%ROOT%dist\tools" mkdir "%ROOT%dist\tools"
 if not exist "%ROOT%build" mkdir "%ROOT%build"
 
-echo [1/5] Building ICC Switch...
+echo [1/6] Building ICC Switch...
 pushd "%ROOT%components\icc-switch"
-call build.cmd
+call .\build.cmd
 if errorlevel 1 (popd & exit /b 1)
 popd
 
-echo [2/5] Building MUX...
+echo [2/6] Building MUX...
 pushd "%ROOT%components\mux-display-switcher"
-call build.cmd
+call .\build.cmd
 if errorlevel 1 (popd & exit /b 1)
 popd
 
-echo [3/5] Building IYX Fast Launcher...
+echo [3/6] Building IYX Fast Launcher...
 pushd "%ROOT%components\iyx-fast-launcher"
-call build.cmd
+call .\build.cmd
 if errorlevel 1 (popd & exit /b 1)
 popd
 
-echo [4/5] Compiling unified launcher...
+echo [4/6] Compiling launcher resources...
+pushd "%ROOT%src"
+"%TOOLCHAIN%\windres.exe" --codepage=65001 toolbox.rc -O coff -o "%ROOT%build\toolbox-res.o"
+if errorlevel 1 (popd & exit /b 1)
+popd
+
+echo [5/6] Compiling unified launcher...
 "%CXX%" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Wno-cast-function-type ^
   -municode -mwindows -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX ^
-  -finput-charset=UTF-8 "%ROOT%src\toolbox_launcher.cpp" ^
+  -finput-charset=UTF-8 "%ROOT%src\toolbox_launcher.cpp" "%ROOT%build\toolbox-res.o" ^
   -o "%ROOT%dist\Toolbox.exe" -lgdiplus -ldwmapi -lshell32 -luser32 ^
   -static-libgcc -static-libstdc++
 if errorlevel 1 exit /b 1
 
-echo [5/5] Collecting tools...
+echo [6/6] Collecting tools...
 copy /y "%ROOT%components\icc-switch\build\icc-switch-gui.exe" "%ROOT%dist\tools\icc-switch-gui.exe" >nul || exit /b 1
 copy /y "%ROOT%components\icc-switch\build\icc-switch.exe" "%ROOT%dist\tools\icc-switch-cli.exe" >nul || exit /b 1
 copy /y "%ROOT%components\mux-display-switcher\dist\MUX.exe" "%ROOT%dist\tools\MUX.exe" >nul || exit /b 1
